@@ -32,6 +32,11 @@
 *.app
 
 #output
-
 /output/*
 !/output/.placeholder
+
+#makefile
+makefile
+
+#compiled code
+BCD
