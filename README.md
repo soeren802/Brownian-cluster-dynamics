@@ -1,4 +1,4 @@
-# Brownian-cluster-dynamics (BCD
+# Brownian-cluster-dynamics (BCD)
 Simulation of Brownian dynamics based on cluster dynamics. This inplementation is usable for one dimensional systems of hard rods with and without adhesive contact interaction.
 
 # Citation 
