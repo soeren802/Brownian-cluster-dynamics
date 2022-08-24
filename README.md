@@ -7,9 +7,11 @@ If you use our code for your own research, we ask you to cite the following pape
 [insert our paper]
 
 # Dependencies
-Our software requires both boost and Armadillo, 
-which can be downloaded from the following sources:
+Our software requires both boost and Armadillo, which can be downloaded from the following sources:
 
 http://arma.sourceforge.net/
 
 https://www.boost.org/
+
+# Acknowledgments
+Financial support by the Czech Science Foundation (Project No. 20-24748J) and the Deutsche Forschungsgemeinschaft (Project No. 432123484) is gratefully acknowledged.
