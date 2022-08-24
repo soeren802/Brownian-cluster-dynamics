@@ -3,6 +3,7 @@ Simulation of Brownian dynamics based on cluster dynamics. This inplementation i
 
 # Citation 
 If you use our code for your own research, we ask you to cite the following paper:
+
 [insert our paper]
 
 # Dependencies
