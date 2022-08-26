@@ -175,7 +175,7 @@ void particleVelocities(){
 }
 
 /**
- * @brief Calculate cluster velocities from configuration and particle velocities
+ * @brief Calculate cluster velocities from culster identification and forces exterted on each particle
  * 
  * @return arma::vec 
  */
@@ -221,7 +221,7 @@ void mergeClusters(int collidingParticle){
 }
 
 /**
- * @brief Breaking clusters at the right positions
+ * @brief Splitting clusters at the correct positions
  * 
  */
 void splitClusters(){ 
@@ -239,7 +239,7 @@ void splitClusters(){
     for(int n = 0; n < totalChecks; n++){
         i = n%N;
         if(configuration(i)>1){
-            //remember first independent particle (single particle or first particle of a cluster)
+            //get the first independent particle (i.e. single particle or first particle of a cluster)
             if(firstIndependentCluster < 0){
                 firstIndependentCluster = i;
                 totalChecks = i + N;
@@ -251,7 +251,7 @@ void splitClusters(){
             relativePosOfBiggestDifference = -1;
             lowestInteractionForce = 0;
 
-            //calculate total force on cluster
+            //calculate total force exerted on the cluster
             for(int j = 0; j < configuration(i); j++){
                 forceRight += v((i+j)%N);
             }
