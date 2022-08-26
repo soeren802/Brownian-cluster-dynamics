@@ -261,14 +261,14 @@ void splitClusters(){
                 forceRight -= v((i+j)%N);
                 forceLeft += v((i+j)%N);
 
-                //find lowest (negative) interaction force
+                //find the pair of subclusters for which the velocity difference is the largest
                 if(forceLeft/(j+1) - forceRight/(configuration(i)-j-1) < lowestInteractionForce){
                     lowestInteractionForce = forceLeft/(j+1) - forceRight/(configuration(i)-j-1);
                     relativePosOfBiggestDifference = j;
                 }      
             }
 
-            //if the cluster has to be split, it is split at the point of lowest (negative) interaction force
+	    //if the difference is positive, we split the cluster
             if(relativePosOfBiggestDifference > -1){
                 configuration((i+relativePosOfBiggestDifference+1)%N) = configuration(i) - relativePosOfBiggestDifference - 1;
                 configuration(i) = relativePosOfBiggestDifference + 1;  
@@ -289,7 +289,6 @@ void checkConfiguration(int collidingParticle){
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
             std::cout<<x(i+1)<<", "<< x(i)<<std::endl;
-            std::cout<<x(i+1)-x(i)-sigma<<std::endl;
             std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
             exit(EXIT_FAILURE);
         }
@@ -298,7 +297,6 @@ void checkConfiguration(int collidingParticle){
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
             std::cout<<x(N-1)<<", "<< x(0)<<std::endl;
-            std::cout<<x(0)-x(N-1)-sigma<<std::endl;
             std::cout<<fabs(getMinimumImageDistance(x(N-1), x(0)))- sigma<<std::endl;
             exit(EXIT_FAILURE);
     }
