@@ -347,8 +347,17 @@ void doSingleTimeStep(){
             }
         }
 
+        for(int i = 0; i < N; i++){
+            if(configuration(i) > 0){
+                x(i) += firstCollision * v(i);
+                for(int j = 1; j < configuration(i); j++){
+                    x((i+j)%N) = x(i) + sigma * j;
+                }
+            }
+        }
+
         //move partciles according to velocities
-        x += firstCollision * v;
+        //x += firstCollision * v;
         applyPeriodicBoundaryConditions();
 
         //remember time passed
