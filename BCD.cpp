@@ -42,13 +42,13 @@ arma::vec configuration;                            /*cluster identification: 1 
 
 arma::vec density;                                  /*one-partcile density*/
 arma::vec density_II;                               /*two-particle density*/
-int spaceSteps;                                     /*space resolution when measuring densities*/
+int spatialSteps;                                     /*spatial resolution when measuring densities*/
 double current;                                     /*particle current*/
 
 double pi = boost::math::double_constants::pi;      /*pi*/
 arma::vec deterministicForce;                       /*f_pot + f*/
 arma::vec interactionForce;                         /*interaction force*/
-int forceSteps = 1000000;                           /*space resolution for pre-calculated forces*/
+int forceSteps = 1000000;                           /*spatial resolution for pre-calculated forces*/
 
 double U0 = 6;                                      /*amplitude of cosine potentail*/
 double D = 1;                                       /*diffusion coefficient*/
@@ -60,8 +60,8 @@ int order = 3;                                      /*order of polynomial repres
 double epsilon = 0.05;                              /*range of adhesive interaction*/
 double dt = 0.0000001;                              /*time step*/
 double f = 0;                                       /*constant drag force*/
-double delta = 0.001;                               /*space resolition for measurements*/
-double deltaPrime = delta;                          /*space resolition for particles in contact*/
+double delta = 0.001;                               /*spatial resolition for measurements*/
+double deltaPrime = delta;                          /*spatial resolition for particles in contact*/
 double equilibrationTime = 1000.0;                  /*time to run th esimulation before starting measurements*/
 double totalSimulationTime = 4000.0;                /*total simulation time*/
 double tfTrajectory = 0.001*totalSimulationTime;    /*time between outputting the particle positions*/
@@ -106,9 +106,9 @@ void initialConfiguration(){
     }
 
     //initialize one/two-particle densities
-    spaceSteps = int(round(1/delta));
-    density = arma::zeros<arma::vec>(spaceSteps);
-    density_II = arma::zeros<arma::vec>(spaceSteps);
+    spatialSteps = int(round(1/delta));
+    density = arma::zeros<arma::vec>(spatialSteps);
+    density_II = arma::zeros<arma::vec>(spatialSteps);
 
     interactionForce = arma::zeros<arma::vec>(forceSteps);
     deterministicForce = arma::zeros<arma::vec>(forceSteps);
@@ -407,14 +407,14 @@ void simulateSystem(){
 
         //calculate one-particle density
         for(int i = 0; i < N; i++){
-            density((x(i) - floor(x(i))) * spaceSteps)++;
+            density((x(i) - floor(x(i))) * spatialSteps)++;
         }
 
         //calculate two-particle density in contact
         for(int i = 0; i < N; i++){
             if(configuration(i) > 0){
                 if(fabs(getMinimumImageDistance(x((i-1+N)%N), x(i))) - sigma < delta){
-                        density_II((x((i-1+N)%N) - floor(x((i-1+N)%N))) * spaceSteps)++;
+                        density_II((x((i-1+N)%N) - floor(x((i-1+N)%N))) * spatialSteps)++;
                     }
                 if(configuration(i) > 1){
                     i += configuration(i) - 1;
@@ -456,14 +456,14 @@ void simulateSystem(){
  * 
  */
 void saveResults(){
-    arma::mat output = arma::zeros<arma::mat>(spaceSteps, 2);
-    for(int i = 0; i < spaceSteps; i++){
+    arma::mat output = arma::zeros<arma::mat>(spatialSteps, 2);
+    for(int i = 0; i < spatialSteps; i++){
         output(i, 0) = i * delta;
         output(i, 1) = density(i);
     }
     output.save(outputPrefix+"/density", arma::raw_ascii);
 
-    for(int i = 0; i < spaceSteps; i++){
+    for(int i = 0; i < spatialSteps; i++){
         output(i, 1) = density_II(i);
     }
     output.save(outputPrefix+"/density_II", arma::raw_ascii);
@@ -496,8 +496,8 @@ void loadInput(){
     ("eqtime", po::value<double>(&equilibrationTime), "Equilibration time before sampling starts.")
     ("tCurrent", po::value<double>(&tfCurrent), "Time interval of outputting the current.")
     ("tTrajectory", po::value<double>(&tfTrajectory), "Time interval of outputting the particle positions.")
-    ("delta", po::value<double>(&delta), "Space resolution.")
-    ("deltaPrime", po::value<double>(&deltaPrime), "Space resolution for particles in contact.")
+    ("delta", po::value<double>(&delta), "Spatial resolution.")
+    ("deltaPrime", po::value<double>(&deltaPrime), "Spatial resolution for particles in contact.")
     ("prefix,o", po::value<std::string>(&outputPrefix), "Path prefix for output files.")
     ;
 
