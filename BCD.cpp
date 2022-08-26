@@ -46,7 +46,7 @@ int spatialSteps;                                     /*spatial resolution when 
 double current;                                     /*particle current*/
 
 double pi = boost::math::double_constants::pi;      /*pi*/
-arma::vec deterministicForce;                       /*f_pot + f*/
+arma::vec deterministicForce;                       /*external force*/
 arma::vec interactionForce;                         /*interaction force*/
 int forceSteps = 1000000;                           /*spatial resolution for pre-calculated forces*/
 
@@ -60,8 +60,8 @@ int order = 3;                                      /*order of polynomial repres
 double epsilon = 0.05;                              /*range of adhesive interaction*/
 double dt = 0.0000001;                              /*time step*/
 double f = 0;                                       /*constant drag force*/
-double delta = 0.001;                               /*spatial resolition for measurements*/
-double deltaPrime = delta;                          /*spatial resolition for particles in contact*/
+double delta = 0.001;                               /*spatial resolition for measuring denity and two-particle-density at contact*/
+double deltaPrime = delta;                          /*spatial resolition for measuring two-particle-density at contact*/
 double equilibrationTime = 1000.0;                  /*time to run th esimulation before starting measurements*/
 double totalSimulationTime = 4000.0;                /*total simulation time*/
 double tfTrajectory = 0.001*totalSimulationTime;    /*time between outputting the particle positions*/
@@ -72,7 +72,7 @@ std::string cfgFile = "basep.cfg";                  /*file name of configuration
 
 
 /**
- * @brief Maps the particle position back into the central image box, updates particle current accordingly 
+ * @brief Maps the particle position back into the central image box according to the boundary conditions. Updates the particle current accordingly. 
  * 
  */
 void applyPeriodicBoundaryConditions(){
@@ -100,7 +100,7 @@ void initialConfiguration(){
     configuration = arma::ones<arma::vec>(N);
     
     /*windows for each particle position are calculated so that there are no conflicts,
-    particle positions are drawn from a uniform distribution within each window*/
+    particle positions are put in each window according to a uniform distribution*/
     for (int i = 0; i < N; ++i) {
         x(i) = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
     }
@@ -197,10 +197,10 @@ void clusterVelocities(){
 }
 
 /**
- * @brief Unify collided clusters into one cluster
+ * @brief Merge collided clusters into one cluster
  * 
  */
-void unifyClusters(int collidingParticle){
+void mergeClusters(int collidingParticle){
     //find first particle of the left cluster
     int i = 0;
     while(configuration((collidingParticle-i+N)%N) < 1){
@@ -359,9 +359,9 @@ void doSingleTimeStep(){
         //check for particle overlaps
         checkConfiguration(collidingParticle);
 
-        //unify collided clusters
+        //merge collided clusters
         if(collidingParticle > -1){
-            unifyClusters(collidingParticle);
+            mergeClusters(collidingParticle);
         }
     }
 }
