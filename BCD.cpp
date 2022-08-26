@@ -284,7 +284,7 @@ void splitClusters(){
  */
 void checkConfiguration(int collidingParticle){
     for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(dt, 2)){
+        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -14)){
             printf("Distance violated: %d, %d \n", i, i+1);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
@@ -292,7 +292,7 @@ void checkConfiguration(int collidingParticle){
             std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
             exit(EXIT_FAILURE);
         }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(dt, 2)){
+		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -14)){
             printf("Distance violated: %d, %d \n", N-1, 0);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
@@ -322,7 +322,7 @@ void doSingleTimeStep(){
     //cluster analysis (fragmentation)
     splitClusters();
 
-    //calculate cluster velocities based on particle velocities and cluster identification
+    //calculate cluster velocities based on forces exerted on particles and cluster identification
     clusterVelocities();
 
     while(remainingTime > 0){
@@ -337,7 +337,7 @@ void doSingleTimeStep(){
                 dx += L;
             }
             dv = v((i-1+N)%N) - v(i);
-            //check whether particles are moving towards one another
+            //check whether particles are moving towards each other
             if(dv > 0){
                 //calculate lowest collision time
                 if(firstCollision > dx/dv){
@@ -347,20 +347,21 @@ void doSingleTimeStep(){
             }
         }
 
+        /*move first particle in each cluster according to the cluster velocity and move the remaining 
+        particles in each cluster with respect to cluster identification*/
         for(int i = 0; i < N; i++){
             if(configuration(i) > 0){
                 x(i) += firstCollision * v(i);
                 for(int j = 1; j < configuration(i); j++){
-                    x((i+j)%N) = x(i) + sigma * j;
+                    x((i+j)%N) = x(i) + sigma * j + L * int(int(x((i+j)%N) + firstCollision * v((i+j)%N))/L - int(x(i) + sigma * j)/L);
                 }
             }
         }
 
         //move partciles according to velocities
-        //x += firstCollision * v;
         applyPeriodicBoundaryConditions();
 
-        //remember time passed
+        //record time passed
         remainingTime -= firstCollision;
 
         //check for particle overlaps
@@ -407,17 +408,17 @@ void simulateSystem(){
     filename = outputPrefix+"/current";
     currentFile = fopen(filename.c_str(), "w");
 
-    //continue simulation for the total simulation time
+    //run simulation for the total simulation time
     while(timePassed < totalSimulationTime){
         doSingleTimeStep();
         timePassed += dt;
 
-        //calculate one-particle density
+        //collect statistics for one-particle density
         for(int i = 0; i < N; i++){
             density((x(i) - floor(x(i))) * spatialSteps)++;
         }
 
-        //calculate two-particle density in contact
+        //collect statistics for two-particle density at contact
         for(int i = 0; i < N; i++){
             if(configuration(i) > 0){
                 if(fabs(getMinimumImageDistance(x((i-1+N)%N), x(i))) - sigma < delta){
@@ -477,7 +478,7 @@ void saveResults(){
 }
 
 /**
- * @brief Load configuration files
+ * @brief Load configuration file
  * 
  */
 void loadInput(){
@@ -512,7 +513,7 @@ void loadInput(){
     po::store(boost::program_options::parse_config_file(file,desc),vm);
     po::notify(vm);
 
-    std::cout<<"totaltime = "<<totalSimulationTime<<std::endl;
+    std::cout<<"totaltime: "<<totalSimulationTime<<std::endl;
     std::cout<<"N = "<<N<<std::endl;
     std::cout<<"L = "<<L<<std::endl;
     std::cout<<"sigma = "<<sigma<<std::endl;
@@ -523,12 +524,12 @@ void loadInput(){
     std::cout<<"gamma = "<<Gamma<<std::endl;
     std::cout<<"order = "<<order<<std::endl;
     std::cout<<"epsilon = "<<epsilon<<std::endl;
-    std::cout<<"eqtime = "<<equilibrationTime<<std::endl;
-    std::cout<<"current output frequency = "<<tfCurrent<<std::endl;
-    std::cout<<"trajectory output frequency = "<<tfTrajectory<<std::endl;
+    std::cout<<"eqtime: "<<equilibrationTime<<std::endl;
+    std::cout<<"current output frequency: "<<tfCurrent<<std::endl;
+    std::cout<<"trajectory output frequency: "<<tfTrajectory<<std::endl;
     std::cout<<"delta = "<<delta<<std::endl;
     std::cout<<"deltaPrime = "<<deltaPrime<<std::endl;
-    std::cout<<"prefix = "<<outputPrefix<<std::endl;
+    std::cout<<"prefix: "<<outputPrefix<<std::endl;
 
     outputPrefix = "output/" + outputPrefix;
 }
