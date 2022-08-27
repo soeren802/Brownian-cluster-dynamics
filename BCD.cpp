@@ -284,7 +284,7 @@ void splitClusters(){
  */
 void checkConfiguration(int collidingParticle){
     for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -14)){
+        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -11)){
             printf("Distance violated: %d, %d \n", i, i+1);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
@@ -292,7 +292,7 @@ void checkConfiguration(int collidingParticle){
             std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
             exit(EXIT_FAILURE);
         }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -14)){
+		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -11)){
             printf("Distance violated: %d, %d \n", N-1, 0);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
