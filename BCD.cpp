@@ -284,20 +284,26 @@ void splitClusters(){
  */
 void checkConfiguration(int collidingParticle){
     for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -11)){
+        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -16)/dt){
             printf("Distance violated: %d, %d \n", i, i+1);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
             std::cout<<x(i+1)<<", "<< x(i)<<std::endl;
             std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
+            std::cout<<x<<std::endl;
+            std::cout<<v<<std::endl;
+            std::cout<<configuration<<std::endl;
             exit(EXIT_FAILURE);
         }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -11)){
+		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -16)/dt){
             printf("Distance violated: %d, %d \n", N-1, 0);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
             std::cout<<x(N-1)<<", "<< x(0)<<std::endl;
             std::cout<<fabs(getMinimumImageDistance(x(N-1), x(0)))- sigma<<std::endl;
+            std::cout<<x<<std::endl;
+            std::cout<<v<<std::endl;
+            std::cout<<configuration<<std::endl;
             exit(EXIT_FAILURE);
     }
     if(arma::accu(configuration) != N){
@@ -347,18 +353,8 @@ void doSingleTimeStep(){
             }
         }
 
-        /*move first particle in each cluster according to the cluster velocity and move the remaining 
-        particles in each cluster with respect to cluster identification*/
-        for(int i = 0; i < N; i++){
-            if(configuration(i) > 0){
-                x(i) += firstCollision * v(i);
-                for(int j = 1; j < configuration(i); j++){
-                    x((i+j)%N) = x(i) + sigma * j + L * int(int(x((i+j)%N) + firstCollision * v((i+j)%N))/L - int(x(i) + sigma * j)/L);
-                }
-            }
-        }
-
         //move partciles according to velocities
+        x += firstCollision * v;
         applyPeriodicBoundaryConditions();
 
         //record time passed
