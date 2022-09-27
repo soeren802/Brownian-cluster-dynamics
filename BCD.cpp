@@ -46,7 +46,7 @@ arma::vec density;                                  /*one-partcile density*/
 arma::vec density_II;                               /*two-particle density*/
 int spatialSteps;                                   /*spatial resolution when measuring densities*/
 double current;                                     /*particle current*/
-double MSD = 0;                                         /*mean square displacement*/
+double MSD = 0;                                     /*mean square displacement*/
 
 double pi = boost::math::double_constants::pi;      /*pi*/
 arma::vec deterministicForce;                       /*external force*/
