@@ -36,14 +36,17 @@ boost::variate_generator<boost::mt19937&, boost::normal_distribution<> > randNor
 boost::random::mt19937 Generator2((std::chrono::system_clock::now().time_since_epoch()).count());
 boost::variate_generator<boost::mt19937&, boost::uniform_01<> > randUniform(Generator2, boost::uniform_01<>());
 
-arma::vec x;                                        /*particle positions*/                                            
+arma::vec x;                                        /*particle positions*/  
+arma::vec x_initial;                                /*initial particle positions*/
+arma::vec x_noPB;                                   /*particle positions without periodic boundaries*/                                         
 arma::vec v;                                        /*particle velocities*/    
 arma::vec configuration;                            /*cluster identification: 1 = independent particle; 0 = particle is part of a cluster; 2,3,..,N = first particle of a cluster with this length*/
 
 arma::vec density;                                  /*one-partcile density*/
 arma::vec density_II;                               /*two-particle density*/
-int spatialSteps;                                     /*spatial resolution when measuring densities*/
+int spatialSteps;                                   /*spatial resolution when measuring densities*/
 double current;                                     /*particle current*/
+double MSD = 0;                                         /*mean square displacement*/
 
 double pi = boost::math::double_constants::pi;      /*pi*/
 arma::vec deterministicForce;                       /*external force*/
@@ -66,6 +69,7 @@ double equilibrationTime = 1000.0;                  /*time to run th esimulation
 double totalSimulationTime = 4000.0;                /*total simulation time*/
 double tfTrajectory = 0.001*totalSimulationTime;    /*time between outputting the particle positions*/
 double tfCurrent = 0.001*totalSimulationTime;       /*time between outputting the particle current*/
+double tfMSD = 0.001;                               /*time between outputting the mean square displacement*/
 std::string outputPrefix = "";                      /*prefix of output (folder name)*/
 std::string cfgFile = "basep.cfg";                  /*file name of configuration parameters*/
 
@@ -93,6 +97,8 @@ void applyPeriodicBoundaryConditions(){
  */
 void initialConfiguration(){
     x = arma::zeros<arma::vec>(N);
+    x_initial = arma::zeros<arma::vec>(N);
+    x_noPB = arma::zeros<arma::vec>(N);
     v = arma::zeros<arma::vec>(N);
     current = 0;
 
@@ -104,6 +110,9 @@ void initialConfiguration(){
     for (int i = 0; i < N; ++i) {
         x(i) = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
     }
+
+    x_initial = x;
+    x_noPB = x;
 
     //initialize one/two-particle densities
     spatialSteps = int(round(1/delta));
@@ -355,6 +364,7 @@ void doSingleTimeStep(){
 
         //move partciles according to velocities
         x += firstCollision * v;
+        x_noPB += firstCollision * v;
         applyPeriodicBoundaryConditions();
 
         //record time passed
@@ -383,6 +393,11 @@ void getEquilibriumState(){
 
     //resetting current
     current = 0;
+
+    //resetting MSD
+    MSD = 0;
+    x_initial = x;
+    x_noPB = x;
 }
 
 /**
@@ -393,16 +408,20 @@ void simulateSystem(){
     double timePassed = 0;
     double tTrajectory = 0;
     double tCurrent = 0;
+    double tMSD = 0;
 
     //prepare output files
     boost::filesystem::create_directory("output/");
     boost::filesystem::create_directory(outputPrefix);
     FILE *trajectoryFile;
     FILE *currentFile;
+    FILE *MSDFile;
     std::string filename = outputPrefix+"/trajectory";
     trajectoryFile = fopen(filename.c_str(), "w");
     filename = outputPrefix+"/current";
     currentFile = fopen(filename.c_str(), "w");
+    filename = outputPrefix+"/MSD";
+    MSDFile = fopen(filename.c_str(), "w");
 
     //run simulation for the total simulation time
     while(timePassed < totalSimulationTime){
@@ -444,11 +463,25 @@ void simulateSystem(){
             fprintf(currentFile, "%f, ", timePassed);
             fprintf(currentFile, "%f\n", current/timePassed);
         }
+
+        for(int i = 0; i < N; i++){
+            MSD += dt * (x_noPB(i) - x_initial(i)) * (x_noPB(i) - x_initial(i));
+        }
+
+        //output MSD at each time interval tfMSD
+        tMSD += dt;
+        if (tMSD >= tfMSD) {
+            tMSD  = 0.0;
+            tfMSD *= 1.1;
+            fprintf(MSDFile, "%f, ", timePassed);
+            fprintf(MSDFile, "%f\n", MSD/timePassed/N);
+        }
     }
 
     //close output files
     fclose(trajectoryFile);
     fclose(currentFile);
+    fclose(MSDFile);
 
     //normalize densities
     density /= totalSimulationTime/dt*L*delta;
@@ -500,6 +533,7 @@ void loadInput(){
     ("eqtime", po::value<double>(&equilibrationTime), "Equilibration time before sampling starts.")
     ("tCurrent", po::value<double>(&tfCurrent), "Time interval of outputting the current.")
     ("tTrajectory", po::value<double>(&tfTrajectory), "Time interval of outputting the particle positions.")
+    ("tMSD", po::value<double>(&tfMSD), "Time interval of outputting the mean square displacement.")
     ("delta", po::value<double>(&delta), "Spatial resolution.")
     ("deltaPrime", po::value<double>(&deltaPrime), "Spatial resolution for particles in contact.")
     ("prefix,o", po::value<std::string>(&outputPrefix), "Path prefix for output files.")
@@ -523,6 +557,7 @@ void loadInput(){
     std::cout<<"eqtime: "<<equilibrationTime<<std::endl;
     std::cout<<"current output frequency: "<<tfCurrent<<std::endl;
     std::cout<<"trajectory output frequency: "<<tfTrajectory<<std::endl;
+    std::cout<<"MSD output frequency: "<<tfMSD<<std::endl;
     std::cout<<"delta = "<<delta<<std::endl;
     std::cout<<"deltaPrime = "<<deltaPrime<<std::endl;
     std::cout<<"prefix: "<<outputPrefix<<std::endl;
