@@ -4,7 +4,7 @@ Simulation of Brownian dynamics based on cluster dynamics. This implementation i
 # Citation 
 If you use our code for your own research, we ask you to cite the following paper:
 
-A. P. Antonov, S. Schweers, A. Ryabov, and P. Maass, Brownian dynamics simulations of hard rods in external fields and with contact interactions, Phys. Rev. E 106, 054606 (2022).
+A. P. Antonov, S. Schweers, A. Ryabov, and P. Maass, Brownian dynamics simulations of hard rods in external fields and with contact interactions, Phys. Rev. E **106**, 054606 (2022).
 
 # Dependencies
 Our software requires both boost and Armadillo, which can be downloaded from the following sources:
