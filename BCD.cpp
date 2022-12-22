@@ -79,7 +79,7 @@ std::string cfgFile = "basep.cfg";                  /*file name of configuration
 
 arma::vec taggedSingleParticlesEpsilon;             /*particles that have a distance larger than epsilon from other partilces at the beginning of the measurement*/
 int numTaggedEpsilon;                               /*number of such partilces*/
-arma::vec taggedSingleParticlesContact;             /*particles that not in contact with other partilces at the beginning of the measurement*/
+arma::vec taggedSingleParticlesContact;             /*particles that are not in contact with other partilces at the beginning of the measurement*/
 int numTaggedContact;                               /*number of such partilces*/
 
 
@@ -442,7 +442,7 @@ void getEquilibriumState(){
 }
 
 /**
- * @brief tag single particles for MSD measurement initially sepearte particles
+ * @brief tag single particles for MSD measurement initially seperate particles
  * 
  */
 void tagParticles(){
