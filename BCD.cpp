@@ -42,6 +42,10 @@ arma::vec x_noPB;                                   /*particle positions without
 arma::vec v;                                        /*particle velocities*/    
 arma::vec configuration;                            /*cluster identification: 1 = independent particle; 0 = particle is part of a cluster; 2,3,..,N = first particle of a cluster with this length*/
 
+arma::vec numOfMerges;
+arma::vec timeOfMerges;
+double meanClusterSize;
+
 arma::vec density;                                  /*one-partcile density*/
 arma::vec density_II;                               /*two-particle density*/
 int spatialSteps;                                   /*spatial resolution when measuring densities*/
@@ -73,6 +77,10 @@ double tfMSD = 0.001;                               /*time between outputting th
 std::string outputPrefix = "";                      /*prefix of output (folder name)*/
 std::string cfgFile = "basep.cfg";                  /*file name of configuration parameters*/
 
+arma::vec taggedSingleParticlesEpsilon;
+int numTaggedEpsilon;
+arma::vec taggedSingleParticlesContact;
+int numTaggedContact;
 
 
 /**
@@ -92,6 +100,23 @@ void applyPeriodicBoundaryConditions(){
 }
 
 /**
+ * @brief Get the Mean Cluster Size object
+ * 
+ * @return double 
+ */
+double getMeanClusterSize(){
+    double num = 0;
+    double size = 0;
+    for(int i = 0; i < N; i++){
+        if(configuration(i)>0){
+            size += configuration(i);
+            num += 1;
+        }
+    }
+    return size/num;
+}
+
+/**
  * @brief Setting random initial particle positions, initializing pre-calculated forces
  * 
  */
@@ -101,6 +126,10 @@ void initialConfiguration(){
     x_noPB = arma::zeros<arma::vec>(N);
     v = arma::zeros<arma::vec>(N);
     current = 0;
+
+    numOfMerges = arma::zeros<arma::vec>(N);
+    timeOfMerges = arma::zeros<arma::vec>(N);
+    meanClusterSize  = 0;
 
     //initalize configuration: all particles are independent
     configuration = arma::ones<arma::vec>(N);
@@ -293,7 +322,7 @@ void splitClusters(){
  */
 void checkConfiguration(int collidingParticle){
     for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -16)/dt){
+        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -12)/dt){
             printf("Distance violated: %d, %d \n", i, i+1);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
@@ -304,7 +333,7 @@ void checkConfiguration(int collidingParticle){
             std::cout<<configuration<<std::endl;
             exit(EXIT_FAILURE);
         }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -16)/dt){
+		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -12)/dt){
             printf("Distance violated: %d, %d \n", N-1, 0);
             std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
@@ -325,7 +354,8 @@ void checkConfiguration(int collidingParticle){
  * @brief Execute a single time step of length dt
  * 
  */
-void doSingleTimeStep(){  
+void doSingleTimeStep(){
+    meanClusterSize += getMeanClusterSize() * dt;
     double firstCollision;
     double remainingTime = dt;
     double dx, dv;
@@ -340,6 +370,8 @@ void doSingleTimeStep(){
     //calculate cluster velocities based on forces exerted on particles and cluster identification
     clusterVelocities();
 
+    int countMerges = 0;
+    auto start = std::chrono::system_clock::now();
     while(remainingTime > 0){
         //calculate time of first collision
         firstCollision = remainingTime;
@@ -376,8 +408,13 @@ void doSingleTimeStep(){
         //merge collided clusters
         if(collidingParticle > -1){
             mergeClusters(collidingParticle);
+            countMerges += 1;
         }
     }
+    auto end = std::chrono::system_clock::now();
+    std::chrono::duration<double> elapsed_seconds = end-start;
+    timeOfMerges(countMerges) += elapsed_seconds.count();
+    numOfMerges(countMerges) += 1;
 }
 
 /**
@@ -398,6 +435,42 @@ void getEquilibriumState(){
     MSD = 0;
     x_initial = x;
     x_noPB = x;
+
+    numOfMerges = arma::zeros<arma::vec>(N);
+    timeOfMerges = arma::zeros<arma::vec>(N);
+    meanClusterSize  = 0;
+}
+
+/**
+ * @brief tag single particles for MSD measurement
+ * 
+ */
+void tagParticles(){
+    numTaggedEpsilon = 0;
+    numTaggedContact = 0;
+    arma::vec taggedEpsilonTemp = arma::zeros<arma::vec>(N);
+    arma::vec taggedContactTemp = arma::zeros<arma::vec>(N);
+
+    for(int i = 0; i<N; i++){
+        if(getMinimumImageDistance(x((i+1)%N), x(i)) - sigma > epsilon && getMinimumImageDistance(x(i), x((i-1+N)%N)) - sigma > epsilon){
+            taggedEpsilonTemp(numTaggedEpsilon) = i;
+            numTaggedEpsilon++;
+        }
+        if(configuration(i) == 1){
+            taggedContactTemp(numTaggedContact) = i;
+            numTaggedContact++;
+        }
+    }
+
+    taggedSingleParticlesEpsilon = arma::zeros<arma::vec>(numTaggedEpsilon);
+    taggedSingleParticlesContact = arma::zeros<arma::vec>(numTaggedContact);
+
+    for(int i = 0; i<numTaggedEpsilon; i++){
+       taggedSingleParticlesEpsilon(i) = taggedEpsilonTemp(i);
+    }
+    for(int i = 0; i<numTaggedContact; i++){
+       taggedSingleParticlesContact(i) = taggedContactTemp(i);
+    }
 }
 
 /**
@@ -409,6 +482,9 @@ void simulateSystem(){
     double tTrajectory = 0;
     double tCurrent = 0;
     double tMSD = 0;
+    int k;
+
+    tagParticles();
 
     //prepare output files
     boost::filesystem::create_directory("output/");
@@ -416,12 +492,18 @@ void simulateSystem(){
     FILE *trajectoryFile;
     FILE *currentFile;
     FILE *MSDFile;
+    FILE *MSDFileSingleEpsilon;
+    FILE *MSDFileSingleContact;
     std::string filename = outputPrefix+"/trajectory";
     trajectoryFile = fopen(filename.c_str(), "w");
     filename = outputPrefix+"/current";
     currentFile = fopen(filename.c_str(), "w");
     filename = outputPrefix+"/MSD";
     MSDFile = fopen(filename.c_str(), "w");
+    filename = outputPrefix+"/MSDsingleEpsilon";
+    MSDFileSingleEpsilon = fopen(filename.c_str(), "w");
+    filename = outputPrefix+"/MSDsingleContact";
+    MSDFileSingleContact = fopen(filename.c_str(), "w");
 
     //run simulation for the total simulation time
     while(timePassed < totalSimulationTime){
@@ -464,17 +546,37 @@ void simulateSystem(){
             fprintf(currentFile, "%f\n", current/timePassed);
         }
 
-        for(int i = 0; i < N; i++){
-            MSD += dt * (x_noPB(i) - x_initial(i)) * (x_noPB(i) - x_initial(i));
-        }
-
         //output MSD at each time interval tfMSD
         tMSD += dt;
         if (tMSD >= tfMSD) {
             tMSD  = 0.0;
             tfMSD *= 1.1;
+            
+            //MSD for all partilces
+            MSD = 0;
+            for(int i = 0; i < N; i++){
+                MSD += (x_noPB(i) - x_initial(i)) * (x_noPB(i) - x_initial(i));
+            }
             fprintf(MSDFile, "%f, ", timePassed);
-            fprintf(MSDFile, "%f\n", MSD/timePassed/N);
+            fprintf(MSDFile, "%f\n", MSD/N);
+
+            //MSD for single partilces (epsilon)
+            MSD = 0;
+            for(int i = 0; i < numTaggedEpsilon; i++){
+                k = int(round(taggedSingleParticlesEpsilon(i)));
+                MSD += (x_noPB(k) - x_initial(k)) * (x_noPB(k) - x_initial(k));
+            }
+            fprintf(MSDFileSingleEpsilon, "%f, ", timePassed);
+            fprintf(MSDFileSingleEpsilon, "%f\n", MSD/numTaggedEpsilon);
+
+            //MSD for single partilces (contact)
+            MSD = 0;
+            for(int i = 0; i < numTaggedContact; i++){
+                k = int(round(taggedSingleParticlesContact(i)));
+                MSD += (x_noPB(k) - x_initial(k)) * (x_noPB(k) - x_initial(k));
+            }
+            fprintf(MSDFileSingleContact, "%f, ", timePassed);
+            fprintf(MSDFileSingleContact, "%f\n", MSD/numTaggedContact);
         }
     }
 
@@ -482,10 +584,13 @@ void simulateSystem(){
     fclose(trajectoryFile);
     fclose(currentFile);
     fclose(MSDFile);
+    fclose(MSDFileSingleEpsilon);
+    fclose(MSDFileSingleContact);
 
     //normalize densities
     density /= totalSimulationTime/dt*L*delta;
     density_II /= totalSimulationTime/dt*L*delta*deltaPrime;
+    timeOfMerges /= numOfMerges;
 }
 
 /**
@@ -504,6 +609,17 @@ void saveResults(){
         output(i, 1) = density_II(i);
     }
     output.save(outputPrefix+"/density_II", arma::raw_ascii);
+
+    output = arma::zeros<arma::mat>(N, 2);
+    for(int i = 0; i < N; i++){
+        output(i, 0) = i;
+        output(i, 1) = timeOfMerges(i);
+    }
+    output.save(outputPrefix+"/timeOfMerges", arma::raw_ascii);
+
+    arma::vec meanCS = arma::zeros<arma::vec>(1);
+    meanCS(0) = meanClusterSize/totalSimulationTime;
+    meanCS.save(outputPrefix+"/meanClusterSize", arma::raw_ascii);
 }
 
 /**
