@@ -77,10 +77,10 @@ double tfMSD = 0.001;                               /*time between outputting th
 std::string outputPrefix = "";                      /*prefix of output (folder name)*/
 std::string cfgFile = "basep.cfg";                  /*file name of configuration parameters*/
 
-arma::vec taggedSingleParticlesEpsilon;
-int numTaggedEpsilon;
-arma::vec taggedSingleParticlesContact;
-int numTaggedContact;
+arma::vec taggedSingleParticlesEpsilon;             /*particles that have a distance larger than epsilon from other partilces at the beginning of the measurement*/
+int numTaggedEpsilon;                               /*number of such partilces*/
+arma::vec taggedSingleParticlesContact;             /*particles that not in contact with other partilces at the beginning of the measurement*/
+int numTaggedContact;                               /*number of such partilces*/
 
 
 /**
@@ -442,7 +442,7 @@ void getEquilibriumState(){
 }
 
 /**
- * @brief tag single particles for MSD measurement
+ * @brief tag single particles for MSD measurement initially sepearte particles
  * 
  */
 void tagParticles(){
@@ -484,6 +484,7 @@ void simulateSystem(){
     double tMSD = 0;
     int k;
 
+    //tag particles for MSD measurement
     tagParticles();
 
     //prepare output files
@@ -560,7 +561,7 @@ void simulateSystem(){
             fprintf(MSDFile, "%f, ", timePassed);
             fprintf(MSDFile, "%f\n", MSD/N);
 
-            //MSD for single partilces (epsilon)
+            //MSD for single partilces (distance larger than epsilon)
             MSD = 0;
             for(int i = 0; i < numTaggedEpsilon; i++){
                 k = int(round(taggedSingleParticlesEpsilon(i)));
@@ -569,7 +570,7 @@ void simulateSystem(){
             fprintf(MSDFileSingleEpsilon, "%f, ", timePassed);
             fprintf(MSDFileSingleEpsilon, "%f\n", MSD/numTaggedEpsilon);
 
-            //MSD for single partilces (contact)
+            //MSD for single partilces (not in contact)
             MSD = 0;
             for(int i = 0; i < numTaggedContact; i++){
                 k = int(round(taggedSingleParticlesContact(i)));
