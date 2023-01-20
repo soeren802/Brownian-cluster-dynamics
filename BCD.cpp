@@ -489,7 +489,7 @@ void simulateSystem(){
 
     //prepare output files
     boost::filesystem::create_directory("output/");
-    boost::filesystem::create_directory(outputPrefix);
+    boost::filesystem::create_directories(outputPrefix);
     FILE *trajectoryFile;
     FILE *currentFile;
     FILE *MSDFile;
