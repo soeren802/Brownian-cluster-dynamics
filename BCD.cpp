@@ -23,8 +23,11 @@ SOFTWARE.
 */
 
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
 #include <iostream>
-#include <armadillo>
+#include <cmath>
 #include <boost/program_options.hpp>
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/normal_distribution.hpp>
@@ -36,164 +39,149 @@ SOFTWARE.
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/fstream.hpp>
-#include <chrono>
+#include <thread>
+#include <vector>
 
-//generator for random numbers (normal distribution)
-boost::random::mt19937 Generator1((std::chrono::system_clock::now().time_since_epoch()).count());
-boost::variate_generator<boost::mt19937&, boost::normal_distribution<> > randNormal(Generator1, boost::normal_distribution<>());
-
-//generator for random numbers (uniform distribution [0, 1])
-boost::random::mt19937 Generator2((std::chrono::system_clock::now().time_since_epoch()).count());
-boost::variate_generator<boost::mt19937&, boost::uniform_01<> > randUniform(Generator2, boost::uniform_01<>());
-
-arma::vec x;                                        /*particle positions*/                                            
-arma::vec x_initial;                                /*initial particle positions*/
-arma::vec x_noPB;                                   /*particle positions without periodic boundaries*/ 
-arma::vec x_old;                                    /*old particle positions*/ 
-arma::vec v;                                        /*particle velocities*/   
-arma::vec configuration;                            /*cluster identification:   1 = independent particle
-                                                                                0 = particle is inside of a cluster
-                                                                                2, 3, .., N = first particle of a cluster with this length
-                                                                                -2, -3, .., -N = last particle of a cluster with this length*/
-
-//arma::vec numOfMerges;                              /*counter for the number of merges*/
-//arma::vec numOfSplits;                              /*counter for the number of splits*/
-//arma::vec timeOfMerges;                             /*total computation time of merges*/
-//arma::vec timeOfSplits;                             /*total computation time of splits*/
-//double meanClusterSize;                             /*mean cluster size*/
-//arma::vec MergesAsFunctionOfMeanClusterSize;        /*number of merges as a function of the mean cluster size*/
-//arma::vec numMergesAsFunctionOfMeanClusterSize;     /*how often does a certain mean cluster size occur after merging*/
-bool save_all_jumps = false;                        /*write every jump across potential barrier to file*/
-
-arma::vec density;                                  /*one-partcile density*/
-arma::vec density_II;                               /*two-particle density at contact*/
-int spatialSteps;                                   /*spatial resolution when measuring densities*/
-double current;                                     /*particle current*/
-
-double pi = boost::math::double_constants::pi;      /*pi*/
-arma::vec deterministicForce;                       /*external force*/
-arma::vec interactionForce;                         /*interaction force*/
-int forceSteps = 1000000;                           /*spatial resolution for pre-calculated forces*/
-
-double U0 = 6;                                      /*amplitude of cosine potentail*/
-double D = 1;                                       /*diffusion coefficient*/
-double sigma = 0.5;                                 /*particle size*/
-int L = 100;                                        /*system length*/
-int N = 50;                                         /*number of particles*/
-double Gamma = 1.0;                                 /*amplitude of adhesive interaction*/
-int order = 3;                                      /*order of polynomial representation of delta function*/
-double epsilon = 0.05;                              /*range of adhesive interaction*/
-double dt = 0.001;                                  /*time step*/
-double f = 0;                                       /*constant drag force*/
-double delta = 0.001;                               /*spatial resolition for measuring denity and two-particle-density at contact*/
-double deltaPrime = delta;                          /*spatial resolition for measuring two-particle-density at contact*/
-double equilibrationTime = 1000.0;                  /*time to run th esimulation before starting measurements*/
-double totalSimulationTime = 3000.0;                /*total simulation time*/
-double tfTrajectory = 0.001*totalSimulationTime;    /*time between outputting the particle positions*/
-double tfCurrent = 0.001*totalSimulationTime;       /*time between outputting the particle current*/
-double tfMSD = 0.001;                               /*time between outputting the mean square displacement*/
 std::string outputPrefix = "";                      /*prefix of output (folder name)*/
 std::string cfgFile = "basep.cfg";                  /*default file name of configuration parameters*/
 
-//double numberOfSplits;                              /*count the number of splits*/
-//double numberOfCollisions;                          /*count number of collisions*/
-//long numberOfContacts;                              /*count number of contact between particles*/
+//generator for seeds for all threads
+boost::random::mt19937 SeedGenerator((std::chrono::system_clock::now().time_since_epoch()).count());
+
+//generator for random numbers (uniform distribution [0, 1])
+boost::random::mt19937 Generator((std::chrono::system_clock::now().time_since_epoch()).count());
+boost::variate_generator<boost::mt19937&, boost::uniform_01<> > randUniform(Generator, boost::uniform_01<>());
+
+//parallelization parameters
+int ThreadsMAX;                                     /*number of available threads*/      
+int numberOfBlocks;                                 /*number of blocks used for parallelization*/
+int *blockSize;                                     /*size of each block*/
+int *blockStart;                                    /*start of each block*/
+int *crossBorderCollisions;                         /*clusters that will collide across block borders*/
+bool *collisionHappened;                            /*did a collision happened?*/
+int *blockStartsForSplitting;                       /*start of each block for the fragmentation procedure*/
+
+//simulation parameters
+int N;                                              /*particles number*/
+int L;                                              /*system length*/       
+double sigma;                                       /*particle size*/
+double dt;                                          /*time step*/
+double simulationDuration;                          /*total simulation time*/
+double equilibrationTime;                           /*time to run th esimulation before starting measurements*/
+double order;                                       /*order of polynomial representation of delta function*/
+double epsilon;                                     /*range of adhesive interaction*/
+double Gamma;                                       /*amplitude of adhesive interaction*/
+double f;                                           /*constant drag force*/
+double U0;                                          /*amplitude of cosine potentail*/
+double D;                                           /*diffusion coefficient*/
+
+//state of simulation
+double *x;                                          /*particle positions*/            
+double *v;                                          /*particle velocities*/
+int *identification;                                /*cluster identification:   1 = independent particle
+                                                                                0 = particle is inside of a cluster
+                                                                                2, 3, .., N = first particle of a cluster with this length
+                                                                                -2, -3, .., -N = last particle of a cluster with this length*/
+bool *collision;                                    /*collision between particles?*/
+
+//measurements
+double delta = 0.001;                               /*spatial resolition for measuring denity*/
+double deltaPrime = delta;                          /*spatial resolition for measuring two-particle-density at contact*/
+double tfTrajectory = 1000;                         /*time between saving the particle positions*/
+double tfCurrent = 1000;                            /*time between saving the particle current*/
+double tfMSD = 0.001;                               /*time between saving the mean square displacement*/
+int spatialSteps;                                   /*spatial resolution when measuring the density*/
+int deltaPrimeSteps;                                /*spatial resolution when measuring two-particle densities at contact*/
+
+//results
+double *density;                                    /*one-partcile density*/
+double *density_II;                                 /*two-particle density at contact*/
+double *current;                                    /*particle current*/
+double *MSD;                                        /*mean square displacement*/
+double *x_initial;                                  /*initial particle positions*/
+double *x_noPB;                                     /*particle positions without periodic boundaries*/
+double *x_old;                                      /*old particle positions*/ 
+
 
 /**
- * @brief Maps the particle position back into the central image box according to the boundary conditions.
+ * @brief Initialize blocks and initial configuration of the system
  * 
  */
-void applyPeriodicBoundaryConditions(){
-    for(int i = 0; i < N; ++i){
-        // Apply periodic boundary conditions
-        if(x(i)>= L){
-            x(i) -= L;
-        }else if(x(i) < 0.0){
-            x(i) += L;
-        }
+void establishBlocks(){
+    blockSize = (int*)malloc(sizeof(int)*numberOfBlocks);
+    blockStart = (int*)malloc(sizeof(int)*numberOfBlocks);
+    crossBorderCollisions = (int*)malloc(sizeof(int)*numberOfBlocks*2);
+    collisionHappened = (bool*)malloc(sizeof(bool)*numberOfBlocks);
+    blockStartsForSplitting = (int*)malloc(sizeof(int)*numberOfBlocks);
+
+    //assign particles to blocks
+    int remaining = N;
+    for(int i = 0; i<numberOfBlocks; i++){
+        blockSize[i] = int(round(remaining/(numberOfBlocks-i)));
+        remaining -= blockSize[i];
+        crossBorderCollisions[i] = -1;
+        collisionHappened[i] = false;
     }
-}
+    for(int i = numberOfBlocks; i<2*numberOfBlocks; i++){
+        crossBorderCollisions[i] = -1;
+    }
+    //add remaining particles to last block
+    if(remaining > 0){
+        std::cout<<remaining<<" remaining and added to last block (this should not be happening)"<<std::endl;
+        blockSize[numberOfBlocks-1] += remaining;
+    }
 
-/**
- * @brief Calculate the instantaneous mean cluster size
- * 
- * @return double 
- */
-double getMeanClusterSize(){
-    double num = 0;
-    double size = 0;
+    //calculate start of each block
+    blockStart[0] = 0;
+    for(int i = 1; i<numberOfBlocks; i++){
+        blockStart[i] = blockStart[i-1]+blockSize[i-1];
+    }
+
+    //initialize particles
     for(int i = 0; i < N; i++){
-        if(configuration(i)>0){
-            size += configuration(i);
-            num += 1;
-        }
+        identification[i] = 1;
+        collision[i] = false;
+        v[i] = 0;
     }
-    return size/num;
-}
-
-/**
- * @brief Setting random initial particle positions, initializing pre-calculated forces
- * 
- */
-void initialConfiguration(){
-    spatialSteps = int(round(1/delta));             
-    x = arma::zeros<arma::vec>(N);
-    x_initial = arma::zeros<arma::vec>(N);
-    x_noPB = arma::zeros<arma::vec>(N);
-    v = arma::zeros<arma::vec>(N);
-    current = 0;
-
-    //numOfMerges = arma::zeros<arma::vec>(N);
-    //numOfSplits = arma::zeros<arma::vec>(100*N);
-    //timeOfMerges = arma::zeros<arma::vec>(N);
-    //timeOfSplits = arma::zeros<arma::vec>(100*N);
-    //meanClusterSize  = 0;
-    //MergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
-    //numMergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
-
-    //initalize configuration: all particles are independent
-    configuration = arma::ones<arma::vec>(N);
 
     /*Windows for each particle position are calculated so that there are no conflicts.
-    Particle positions are put in each window according to a uniform distribution.*/
+    Particle positions are put in each window according to a uniform distribution*/
     for (int i = 0; i < N; ++i) {
-        x(i) = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
+        x[i] = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
+        x_old[i] = x[i];
+        x_initial[i] = x[i];
+        x_noPB[i] = x[i];
     }
-
-    x_initial = x;
-    x_noPB = x;
-
-    //initialize one/two-particle densities
-    density = arma::zeros<arma::vec>(spatialSteps);
-    density_II = arma::zeros<arma::vec>(spatialSteps);
-
-    interactionForce = arma::zeros<arma::vec>(forceSteps);
-    deterministicForce = arma::zeros<arma::vec>(forceSteps);
-
-    //pre-calculate interaction forces
-    for(int i = 0; i < forceSteps; i++){
-        deterministicForce(i) = pi * U0 * sin(2 * pi * double(i)/double(forceSteps)) + f;
-    }
-
-    //pre-calculate interaction forces
-    double distance;
-    for(int i = 0; i < forceSteps; i++){
-        distance = double(i)/double(forceSteps) + sigma;
-
-        if(distance >= sigma + epsilon){
-            interactionForce(i) = 0.0;
-        }else{
-            interactionForce(i) = -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
-        }
-    }
-
-    //numberOfSplits = 0;
-    //numberOfCollisions = 0;
-    //numberOfContacts = 0;
 }
 
 /**
- * @brief Get the minimum image distance between particles
+ * @brief Update which clusters will definitely collide
+ * 
+ */
+void updateCollisions(int id) {
+    int pos;
+    double dx;
+    //go through all particles in block and check if they will collide
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        if(identification[pos]!=0 && identification[(pos+1)%N]!=0){
+            dx = x[(pos+1)%N]-x[pos];
+            if(dx<0){
+                dx += L;
+            }
+            if(v[pos] > v[(pos+1)%N]){
+                if((dx-sigma)/(v[pos]-v[(pos+1)%N]) < dt){
+                    collision[pos] = true;
+                }else{
+                    collision[pos] = false;
+                }
+            }
+        }
+    }
+}
+
+/**
+ * @brief Get the minimum image distance between two particles
  * 
  * @param xi position of first particle
  * @param xj position of second particle
@@ -213,136 +201,56 @@ double getMinimumImageDistance(double xi, double xj){
  * @brief Draw new particle velocities (random + deterministic forces)
  *  
  */
-void particleVelocities(){
+void particleVelocities(int id, int seed){
+    //initialize local RNG of each block
+    boost::random::mt19937 Generator(seed);
+    boost::variate_generator<boost::mt19937&, boost::normal_distribution<> > randNormal(Generator, boost::normal_distribution<>());
+
     double interaction = 0;
     double distance;
 
-    for(int i = 0; i < N; i++){
+    int pos;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
         interaction = 0;
         //get interaction forces, if particles are within interaction range epsilon
-        distance = getMinimumImageDistance(x(i), x((i-1+N)%N));
-        if(distance < sigma + epsilon){
-            interaction += interactionForce(int(round((distance-sigma)*forceSteps)));
+        if(Gamma > 0){
+            distance = getMinimumImageDistance(x[pos], x[(pos-1+N)%N]);
+            if(distance < sigma + epsilon){
+                interaction += -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
+            }
+            distance = getMinimumImageDistance(x[(pos+1)%N], x[pos]);
+            if(distance < sigma + epsilon){
+                interaction -= -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
+            }
         }
-        distance = getMinimumImageDistance(x((i+1)%N), x(i));
-        if(distance < sigma + epsilon){
-            interaction -= interactionForce(int(round((distance-sigma)*forceSteps)));
-        }
+        
         //calculate particle velocity
-        v(i) = deterministicForce((x(i) - floor(x(i))) * forceSteps) + interaction + sqrt(2*D/dt)*randNormal();
+        v[pos] = boost::math::double_constants::pi * U0 * sin(2 * boost::math::double_constants::pi * x[pos]) + f + interaction;
+        v[pos] += sqrt(2*D/dt)*randNormal();
     }
 }
 
 /**
  * @brief Calculate cluster velocities from culster identification and particle velocities
  * 
- */
-void clusterVelocities(){
-    for(int i = 0; i < N; i++){
-        if(configuration(i)>0){
-            for(int j = 1; j < configuration(i); j++){
-                v(i) += v((i+j)%N);
-            }
-            v(i) /= configuration(i);
-
-            for(int j = 1; j < configuration(i); j++){
-                v((i+j)%N) = v(i);
-            }
-        }
-    }
-}
-
-/**
- * @brief Splitting clusters at the correct positions
+ * @param id of blocks
  * 
  */
-void splitClusters(){ 
-    double forceLeft;                               /*total force on the left subcluster*/
-    double forceRight;                              /*total force on the right subcluster*/
-
-    int relativePosOfBiggestDifference;             /*position of potential split*/
-    double lowestInteractionForce;                  /*lowest difference of the interaction forces of the two subclusters found so far*/
-
-    int firstIndependentCluster = -1;               /*index of the first cluster*/
-    int totalChecks = N;                            /*total number of particles to check*/
-    int i;                                          /*index of the current particle*/
-
-    //check all clusters
-    for(int n = 0; n < totalChecks; n++){
-        i = n%N;
-        //find next cluster
-        if(configuration(i)>1){
-            //find the first particle of the first cluster
-            if(firstIndependentCluster < 0){
-                firstIndependentCluster = i;
-                totalChecks = i + N;
+void clusterVelocities(int id){
+    int pos;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        if(identification[pos]>0){
+            for(int j = 1; j < identification[pos]; j++){
+                v[pos] += v[(pos+j)%N];
             }
+            v[pos] /= identification[pos];
 
-            forceLeft = 0;
-            forceRight = 0;
-
-            relativePosOfBiggestDifference = -1;
-            lowestInteractionForce = 0;
-
-            //calculate total force exerted on the cluster
-            for(int j = 0; j < configuration(i); j++){
-                forceRight += v((i+j)%N);
+            for(int j = 1; j < identification[pos]; j++){
+                v[(pos+j)%N] = v[pos];
             }
-
-            //calculate forces on two subclusters for all possible splitting positions
-            for(int j = 0; j < configuration(i)-1; j++){ /*added -1 to fix this (#connections = #particles - 1)*/
-                //update forces of both subclusters
-                forceRight -= v((i+j)%N);
-                forceLeft += v((i+j)%N);
-
-                //find the pair of subclusters for which the velocity difference is the largest
-                if(forceLeft/(j+1) - forceRight/(configuration(i)-j-1) < lowestInteractionForce){
-                    lowestInteractionForce = forceLeft/(j+1) - forceRight/(configuration(i)-j-1);
-                    relativePosOfBiggestDifference = j;
-                }      
-            }
-
-            //if the difference is positive, we split the cluster by updateing the configuration
-            if(relativePosOfBiggestDifference > -1){
-                configuration((i+relativePosOfBiggestDifference+1)%N) = configuration(i) - relativePosOfBiggestDifference - 1;
-                configuration(i) = relativePosOfBiggestDifference + 1; 
-
-                //check the new cluster again
-                n--;
-
-                if(configuration(i) > 1){
-                    configuration((i+int(configuration(i))-1)%N) = - configuration(i);
-                }
-
-                if(configuration((i+relativePosOfBiggestDifference+1)%N) > 1){
-                    configuration((i+relativePosOfBiggestDifference+1+int(configuration((i+relativePosOfBiggestDifference+1)%N))-1)%N) = - configuration((i+relativePosOfBiggestDifference+1)%N);
-                }
-                //numberOfSplits += 1;
-            } 
         }
-    }
-}
-
-
-/**
- * @brief Checks that the hardcore constrains are not violated, throw error if conditions are violated
- * 
- */
-void checkConfiguration(){
-    for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -12)/dt) {
-            printf("Distance violated: %d, %d \n", i, i+1);
-            std::cout.precision(17);
-            std::cout<<x(i+1)<<", "<< x(i)<<std::endl;
-            std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
-            exit(EXIT_FAILURE);
-        }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -12)/dt) {
-            printf("Distance violated: %d, %d \n", N-1, 0);
-            std::cout.precision(17);
-            std::cout<<x(N-1)<<", "<< x(0)<<std::endl;
-            std::cout<<fabs(getMinimumImageDistance(x(N-1), x(0)))- sigma<<std::endl;
-            exit(EXIT_FAILURE);
     }
 }
 
@@ -350,428 +258,759 @@ void checkConfiguration(){
  * @brief Total sum of all positions of the particles in the cluster
  * 
  * @param id of the first particle of the cluster
+ * @param identification of clusters
+ * @param sigma size of the particles
+ * @param N number of particles
+ * @param x particle positions
+ * 
  * @return double 
  */
-double getClusterCM(int id){
+double getClusterCM(int id, int *identification, double sigma, int N, double *x){
     id += 2*N;
     id = id%N;
-    return x(id) * configuration(id) + sigma * ((configuration(id)-1) * configuration(id)) / 2;
+    return x[id] * identification[id] + sigma * ((identification[id]-1) * identification[id]) / 2;
 }
 
 /**
  * @brief Total sum of all velocities of the particles in the cluster
  * 
  * @param id of the first particle of the cluster
+ * @param identification of clusters
+ * @param N number of particles
+ * @param v particle velocities
+ * 
  * @return double 
  */
-double getClusterV(int id){
+double getClusterV(int id, int *identification, int N, double *v){
     id += 2*N;
     id = id%N;
-    return v(id) * configuration(id);
+    return v[id] * identification[id];
 }
 
 /**
  * @brief Number of particles in the cluster
  * 
  * @param id of the first particle of the cluster
+ * @param identification of clusters
+ * @param N number of particles
+ * 
  * @return double 
  */
-double getClusterSize(int id){
+double getClusterSize(int id, int *identification, int N){
     id += 2*N;
     id = id%N;
-    return int(configuration(id));
+    return identification[id];
 }
 
 /**
  * @brief Get the id of the next cluster to the left
  * 
  * @param id of the first particle of the cluster
+ * @param identification of clusters
+ * @param N number of particles
+ * 
  * @return int 
  */
-int getLeftId(int id){
-    if(configuration((id-1+N)%N)<0){
-        return int(configuration((id-1+N)%N)) + id;
+int getLeftId(int id, int *identification, int N){
+    if(identification[(id-1+N)%N]<0){
+        return identification[(id-1+N)%N] + id;
     }else{
         return id - 1;
     }
 }
 
+void printState();
+
 /**
- * @brief Execute a single time step of duration dt
+ * @brief Check if the cluster identification is correct
+ * 
+ * @param where "where" in the code the check is performed
+ */
+void checkIdentification(std::string where){
+    int lengthOfCluster = 0;
+    int remaining = 0;
+    int offset = 0;
+
+    //search for the first particle of a cluster
+    while(identification[offset]<1){
+        offset++;
+    }
+
+    //check the cluster identification for all particles
+    for(int i = 0; i < N; i++){
+        if(remaining > 0){
+            remaining--;
+            if(remaining==0){
+                if(identification[(offset+i)%N]!=-lengthOfCluster){
+                    printState();
+                    std::cout<<std::endl;
+                    std::cout<<where<<std::endl;
+                    std::cout<<(offset+i)%N<<"should be end of cluster"<<std::endl;
+                    throw 1;
+                }
+            }else{
+                if(identification[(offset+i)%N]!=0){
+                    printState();
+                    std::cout<<std::endl;
+                    std::cout<<where<<std::endl;
+                    std::cout<<(offset+i)%N<<"should be 0"<<std::endl;
+                    throw 1;
+                }
+            }
+        }else{
+            if(identification[(offset+i)%N]>1){
+                lengthOfCluster = identification[(offset+i)%N];
+                remaining = identification[(offset+i)%N]-1;
+            }
+            if(identification[(offset+i)%N]<=0){
+                printState();
+                std::cout<<std::endl;
+                std::cout<<where<<std::endl;
+                std::cout<<(offset+i)%N<<"should be start of cluster"<<std::endl;
+                throw 1;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Merge clusters within block boundaries
+ * 
+ * @param id of the block
  * 
  */
-void doSingleTimeStep(){ 
-    //remember old particle positions
-    x_old = x;
+void merge(int id) { 
+    //save data of current cluster
+    int pos;
+    int first;
+    int last;
+    int size;
+    double speed;
+    double cm;
 
-    //double currentClusterSize = getMeanClusterSize();
-    //meanClusterSize += currentClusterSize * dt;
-    //int countMerges = 0;
+    //go through all particles in block and check if they will collide
+    for(int i = 0; i < blockSize[id]-1; i++){
+        //id of current cluster (first particle of the cluster)
+        pos = i + blockStart[id];
 
-    //calculate new particle velocities
-    particleVelocities();
+        //check if the cluster will collide
+        if(collision[pos]){
+            collision[pos] = false;
+            last = identification[(pos+1)%N]+pos;
+            if(identification[pos]<0){
+                first = pos+identification[pos]+1;
+            }else{
+                first = pos;
+            }
 
-    //auto start = std::chrono::system_clock::now();
+            //if the cluster is not at the border of the block, perform the merge
+            if(last < blockStart[id]+blockSize[id] && first >= blockStart[id]){
+                cm = getClusterCM(first, identification, sigma, N, x);
+                cm += getClusterCM((pos+1)%N, identification, sigma, N, x);
+                if(x[(pos+1)%N]<x[(first+N)%N]){
+                    cm += L*identification[(pos+1)%N];
+                }
+                size = identification[(first+N)%N]+identification[(pos+1)%N];
+                speed = identification[(first+N)%N]*v[(first+N)%N] + identification[(pos+1)%N]*v[(pos+1)%N];
 
-    //cluster analysis (fragmentation)
-    splitClusters();
-
-    //auto end = std::chrono::system_clock::now();
-    //std::chrono::duration<double> elapsed_seconds = end-start;
-    //timeOfSplits(round(100*currentClusterSize)-1) += elapsed_seconds.count();
-    //numOfSplits(round(100*currentClusterSize)-1) += 1;
-
-    //calculate cluster velocities based on forces exerted on particles and cluster identification
-    clusterVelocities();
-    
-    //start = std::chrono::system_clock::now();
-
-    //keep 3 neighboring clusters in memory at all times
-    int thisId, thisSize;
-    double thisCM, thisV;
-
-    int leftId, leftSize;
-    double leftCM, leftV;
-
-    int rightId, rightSize;
-    double rightCM, rightV;
-
-    double dx, dv;
-    int collisionHappened = 0;
-    int firstId;
-
-    //find first cluster
-    thisId = 0;                                        
-    while(configuration(thisId)<1){
-        thisId++;
+                speed /= size;
+                cm /= size;
+                for(int j = first; j <= last; j++){
+                    v[(j+N)%N] = speed;
+                    x[(j+N)%N] = cm-sigma*(double(size-1)/2.0-double(j-first));
+                    identification[(j+N)%N] = 0;
+                }
+                identification[(first+N)%N] = size;               
+                identification[last%N] = -size;
+                collisionHappened[id] = true;
+            
+            //if the cluster is at the border of the block, save the collision for later
+            }else if (last >= blockStart[id]+blockSize[id]){
+                crossBorderCollisions[id] = pos;
+            }else{
+                crossBorderCollisions[id+numberOfBlocks] = pos;
+            } 
+        }
     }
-    firstId = thisId;
 
-    //load data for all 3 clusters
-    thisCM = getClusterCM(thisId);
-    thisV = getClusterV(thisId);
-    thisSize = getClusterSize(thisId);
+    //if the cluster is at the border of the block, save the collision for later
+    if(collision[blockStart[id]+blockSize[id]-1]){
+        collision[blockStart[id]+blockSize[id]-1] = false;
+        crossBorderCollisions[id] = blockStart[id]+blockSize[id]-1;
+    }
+}
 
-    leftId = getLeftId(thisId);
-    rightId = int(configuration(thisId%N)) + thisId;
+/**
+ * @brief Merge clusters across block boundary
+ * 
+ * @return true a collision happened
+ * @return false no collision happened
+ * 
+ */
+bool mergeCrossBlockBorders(){
+    //save data of current cluster
+    int pos;
+    int first;
+    int last;
+    int size;
+    double speed;
+    double cm;
+    bool anyCollisionHappened = false;
 
-    leftCM = getClusterCM(leftId);
-    leftV = getClusterV(leftId);
-    leftSize = getClusterSize(leftId);
+    //go through all collisions that happened across block borders
+    for(int i = 0; i < 2*numberOfBlocks; i++){
 
-    rightCM = getClusterCM(rightId);
-    rightV = getClusterV(rightId);
-    rightSize = getClusterSize(rightId);
-    do{
-        //calculate time until next collision
-        dv = thisV/thisSize - rightV/rightSize;
-        dx = rightCM/rightSize - sigma * double(rightSize+thisSize)/2 - thisCM/thisSize;
-        if(rightCM/rightSize < sigma * double(rightSize+thisSize-2)/2 + thisCM/thisSize){
-            dx += L;
+        //if a collision is detected, merge the clusters
+        if(crossBorderCollisions[i] > -1){
+            pos = crossBorderCollisions[i];
+
+            //remember that a collision happened
+            anyCollisionHappened = true;
+            crossBorderCollisions[i] = -1;
+
+            last = identification[(pos+1)%N]+pos;
+            if(identification[pos]<0){
+                first = pos+identification[pos]+1;
+            }else{
+                first = pos;
+            }
+
+            cm = getClusterCM((first+N)%N, identification, sigma, N, x);
+            cm += getClusterCM((pos+1)%N, identification, sigma, N, x);
+            if(x[(pos+1)%N]<x[(first+N)%N]){
+                cm += L*identification[(pos+1)%N];
+            }
+    
+            size = identification[(first+N)%N]+identification[(pos+1)%N];
+            speed = identification[(first+N)%N]*v[(first+N)%N] + identification[(pos+1)%N]*v[(pos+1)%N];
+            
+            speed /= size;
+            cm /= size;
+            for(int j = first; j <= last; j++){
+                v[(j+N)%N] = speed;
+                x[(j+N)%N] = cm-sigma*(double(size-1)/2.0-double(j-first));
+                identification[(j+N)%N] = 0;
+            }
+            
+            identification[(first+N)%N] = size;
+            identification[last%N] = -size;
+        }
+    }
+
+    //remember if a collision happened
+    for(int i = 0; i < numberOfBlocks; i++){
+        if(collisionHappened[i]){
+            collisionHappened[i] = false;
+            anyCollisionHappened = true;
+        }
+    }
+    return anyCollisionHappened;
+}
+
+/**
+ * @brief Maps the particle position back into the central image box according to the boundary conditions.
+ * 
+ * @param id of the block
+ * 
+ */
+void applyPeriodicBoundaryConditions(int id){
+    int pos;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        // Apply periodic boundary conditions
+        if(x[pos] >= L){
+            x[pos] -= L;
+        }else if(x[pos] < 0.0){
+            x[pos] += L;
+        }
+    }
+}
+
+/**
+ * @brief Advance time by one time step
+ * 
+ * @param id of the block
+ * 
+ */
+void advanceTime(int id){
+    int pos;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+
+        //particle propagation
+        x[pos] += v[pos]*dt;
+
+        if(x[pos]-x_old[pos]>L/2){
+            x_old[pos]+=L;
+        }
+        if(x[pos]-x_old[pos]<-L/2){
+            x_old[pos]-=L;
+        }
+        x_noPB[pos] += x[pos]-x_old[pos]; 
+        x_old[pos] = x[pos];
+    }
+}
+
+/**
+ * @brief Find a good starting position for the fragmentation procedure for each block (i.e. beginning of a cluster)
+ * 
+ * @param id of the block
+ * 
+ */
+void startOfSplits(int id){
+    int pos;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        if(identification[pos] > 0){
+            blockStartsForSplitting[id] = pos;
+            return;
+        }
+    }
+    blockStartsForSplitting[id] = -1;
+}
+
+/**
+ * @brief Splitting clusters at the correct positions
+ * 
+ * @param id of the block
+ * 
+ */
+void splitClusters(int id){
+    double forceLeft;                           /*total force on the left subcluster*/
+    double forceRight;                          /*total force on the right subcluster*/
+
+    int relativePosOfBiggestDifference;         /*position of potential split*/
+    double lowestInteractionForce;              /*lowest difference of the interaction forces of the two subclusters found so far*/
+
+    int pos;
+
+    //exit if no cluster were assigned to the block
+    int blockSize;
+    if(blockStartsForSplitting[id]<0){
+        return;
+    }
+
+    //find the next block to which clusters were assigned
+    int k = (id + 1)%numberOfBlocks;
+    while(blockStartsForSplitting[k]<0){
+        k = (k+1)%numberOfBlocks;
+    }
+
+    //calculate the size of the block
+    blockSize = blockStartsForSplitting[k]-blockStartsForSplitting[id];
+    if(blockSize<=0){
+        blockSize += N;
+    }
+    
+    //iterate over all particles in the block
+    for(int i = 0; i < blockSize; i++){
+        //id of the first particle of the next cluster
+        pos = (i + blockStartsForSplitting[id])%N;
+
+        //if the particle is the first one of a cluster, we check if the cluster should be split
+        if(identification[pos]>1){
+            forceLeft = 0;
+            forceRight = 0;
+
+            relativePosOfBiggestDifference = -1;
+            lowestInteractionForce = 0;
+
+            //calculate total force exerted on the cluster
+            for(int j = 0; j < identification[pos]; j++){
+                forceRight += v[(pos+j)%N];
+            }
+
+            //calculate forces on two subclusters for all possible splitting positions
+            for(int j = 0; j < identification[pos]-1; j++){
+                forceRight -= v[(pos+j)%N];
+                forceLeft += v[(pos+j)%N];
+
+                //find the pair of subclusters for which the velocity difference is the largest
+                if(forceLeft/(j+1) - forceRight/(identification[pos]-j-1) < lowestInteractionForce){
+                    lowestInteractionForce = forceLeft/(j+1) - forceRight/(identification[pos]-j-1);
+                    relativePosOfBiggestDifference = j;
+                }      
+            }
+
+            //if the difference is positive, we split the cluster by updateing the configuration
+            if(relativePosOfBiggestDifference > -1){
+                identification[(pos+relativePosOfBiggestDifference+1)%N] = identification[pos] - relativePosOfBiggestDifference - 1;
+                identification[pos] = relativePosOfBiggestDifference + 1; 
+
+                //check the new cluster again
+                i--;
+
+                if(identification[pos] > 1){
+                    identification[(pos+identification[pos]-1)%N] = - identification[pos];
+                }
+
+                if(identification[(pos+relativePosOfBiggestDifference+1)%N] > 1){
+                    identification[(pos+relativePosOfBiggestDifference+1+identification[(pos+relativePosOfBiggestDifference+1)%N]-1)%N] = - identification[(pos+relativePosOfBiggestDifference+1)%N];
+                }
+            } 
+        }
+    }
+}
+
+/**
+ * @brief Initialize simulation
+ * 
+ */
+void initialize(){
+    //get number of available threads on the machine
+    ThreadsMAX = std::thread::hardware_concurrency();
+
+    //redduce the number of threads if the number of particles is small
+    numberOfBlocks = int(N/1000);
+    if(numberOfBlocks > ThreadsMAX){
+        numberOfBlocks = ThreadsMAX;
+    }
+
+    //set a maximum number of threads
+    //if(numberOfBlocks > 4){
+    //    numberOfBlocks = 4;
+    //}
+
+    //use at least one thread
+    if(numberOfBlocks < 1){
+        numberOfBlocks = 1;
+    }
+
+    //print information about the number of threads available and used
+    std::cout<<""<<std::endl;
+    std::cout<<"Number of available Threads: "<<ThreadsMAX<<std::endl;
+    std::cout<<"Number of used Threads: "<<numberOfBlocks<<std::endl;
+    std::cout<<""<<std::endl;
+
+
+    //update resolition for density measurements
+    spatialSteps = round(1/delta);
+    deltaPrimeSteps = round(1/deltaPrime);
+
+    x = (double*)malloc(sizeof(double)*N);
+    x_initial = (double*)malloc(sizeof(double)*N);
+    x_noPB = (double*)malloc(sizeof(double)*N);
+    x_old = (double*)malloc(sizeof(double)*N);
+    v = (double*)malloc(sizeof(double)*N);
+    identification = (int*)malloc(sizeof(int)*N);
+    collision = (bool*)malloc(sizeof(bool)*N);
+    
+    //initialize all blocks
+    establishBlocks();
+
+    //prepare measurements
+    density = (double*)malloc(sizeof(double)*spatialSteps*numberOfBlocks);
+    density_II = (double*)malloc(sizeof(double)*spatialSteps*numberOfBlocks);
+    for(int i = 0; i<spatialSteps*numberOfBlocks; i++){
+        density[i] = 0;
+        density_II[i] = 0;
+    }
+    current = (double*)malloc(sizeof(double)*numberOfBlocks);
+    MSD = (double*)malloc(sizeof(double)*numberOfBlocks);
+    for(int i = 0; i < numberOfBlocks; i++){
+        current[i] = 0;
+        MSD[i] = 0;
+    }
+}
+
+/**
+ * @brief Clean up memory after execution of the simulation
+ * 
+ */
+void cleanUp(){
+    free(x);
+    free(x_initial);
+    free(x_noPB);
+    free(x_old);
+    free(v);
+    free(identification);
+    free(collision);
+    free(collisionHappened);
+    free(crossBorderCollisions);
+    free(blockSize);
+    free(blockStart);
+    free(density);
+    free(density_II);
+    free(current);
+    free(blockStartsForSplitting);
+}
+
+/**
+ * @brief Print the current state of the simulation
+ * 
+ */
+void printState(){
+    for(int i = 0; i < N; i++){
+        std::cout<<"x["<<i<<"]="<<x[i]<<std::endl;
+        std::cout<<"v["<<i<<"]="<<v[i]<<std::endl;
+        std::cout<<"collision["<<i<<"]="<<collision[i]<<std::endl;
+        std::cout<<"identification["<<i<<"]="<<identification[i]<<std::endl;
+        std::cout<<" "<<std::endl;
+    }
+}
+
+/**
+ * @brief Checks that the hardcore constrains are not violated, throw error if conditions are violated
+ * 
+ */
+void checkConfiguration(int id, std::string where){
+    int pos;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        if (fabs(getMinimumImageDistance(x[(pos+1)%N], x[pos])) - sigma < -pow(10, -10)/dt) {
+            std::cout<<where<<std::endl;
+            printState();
+            std::cout<<std::endl;
+            printf("Distance violated: %d, %d \n", pos, (pos+1)%N);
+            std::cout.precision(17);
+            std::cout<<x[(pos+1)%N]<<", "<< x[pos]<<std::endl;
+            std::cout<<fabs(getMinimumImageDistance(x[pos], x[(pos+1)%N]))- sigma<<std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+/**
+ * @brief Perform measurements of physical quantities
+ * 
+ * @param id of the block
+ */
+void doMeasurements(int id){
+    int pos;
+
+    //collect statistics for one-particle density
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        density[int((x[pos] - floor(x[pos])+id) * spatialSteps)]++;
+    }
+
+    //collect statistics for two-particle density at contact
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        if(identification[pos] > 0){
+            if(fabs(getMinimumImageDistance(x[(pos-1+N)%N], x[pos])) - sigma < delta){
+                    density_II[int((x[(pos-1+N)%N] - floor(x[(pos-1+N)%N])+id) * spatialSteps)]++;
+                }
+            if(identification[pos] > 1){
+                i += identification[pos] - 1;
+            }
+        }
+    }
+
+    //collect statistics for particle current
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        current[id] += v[pos];
+    }
+
+    //collect statistics for MSD
+    MSD[id] = 0;
+    for(int i = 0; i < blockSize[id]; i++){
+        pos = i + blockStart[id];
+        MSD[id] += (x_noPB[pos] - x_initial[pos]) * (x_noPB[pos] - x_initial[pos]);
+    }
+}
+
+/**
+ * @brief Perform one step of the simulation
+ * 
+ */
+void doStep(){
+    //array containing all threads
+    std::thread threads[numberOfBlocks];
+
+    //calculate particle velocities in parallel
+    int seed;
+    for(int i = 0; i < numberOfBlocks; i++){
+        //generate seed for RNG generator of each thread
+        seed = SeedGenerator();
+        threads[i] = std::thread(particleVelocities, i, seed);
+    }
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
+    }
+
+    //determine good blocks for splitting in parallel
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i] = std::thread(startOfSplits, i);
+    }
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
+    }
+    
+    //split clusters in parallel
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i] = std::thread(splitClusters, i);
+    }
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
+    }
+
+    //calculate cluster velocities in parallel
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i] = std::thread(clusterVelocities, i);
+    }
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
+    }
+
+    do{ 
+        //detect all collisions in parallel
+        for(int i = 0; i < numberOfBlocks; i++){
+            threads[i] = std::thread(updateCollisions, i);
+        }
+        for(int i = 0; i < numberOfBlocks; i++){
+            threads[i].join();
         }
         
-        //if collision happens within time dt, merge clusters
-        if(dv > 0 && dt >= dx/dv){
-            if(thisCM/thisSize > rightCM/rightSize){
-                rightCM += rightSize * L;
-            }
-            rightCM +=thisCM;
-            rightV += thisV;
-            rightSize += thisSize;
-            rightId = thisId;
-
-            thisId = leftId;
-            thisV = leftV;
-            thisCM = leftCM;
-            thisSize = leftSize;
-
-            //load data for the new cluster neighboring to the left
-            leftId = getLeftId(thisId);
-            leftCM = getClusterCM(leftId);
-            leftV = getClusterV(leftId);
-            leftSize = getClusterSize(leftId);
-
-            //remember that  collision happened
-            collisionHappened = 1;
-
-            //numberOfCollisions += 1;
-            //countMerges += 1;
-        }else{
-            //if a merge happened but no further merges are detected for the same cluster at this time, update the configuration
-            if(collisionHappened > 0){
-                for(int i = 0; i<rightSize; i++){
-                    configuration((i+rightId+N)%N) = 0;
-                    v((i+rightId+N)%N) = rightV/rightSize;
-                    x((i+rightId+N)%N) = rightCM/rightSize + sigma * double(2*i-rightSize+1)/2;
-                }
-                configuration((rightId+N)%N) = rightSize;
-                configuration((rightId+rightSize-1+N)%N) = -rightSize;
-                collisionHappened = 0;
-            }
-            
-            //move on to the next cluster
-            leftId = thisId;
-            leftCM = thisCM;
-            leftSize = thisSize;
-            leftV = thisV;
-
-            thisId = rightId;
-            thisV = rightV;
-            thisCM = rightCM;
-            thisSize = rightSize;
-            
-            //load data for the new cluster neighboring to the right
-            rightId = int(configuration((thisId+N)%N)) + thisId;
-            
-            rightCM = getClusterCM(rightId);
-            
-            rightV = getClusterV(rightId);
-         
-            rightSize = getClusterSize(rightId);
+        //merge colliding clusters in parallel
+        for(int i = 0; i < numberOfBlocks; i++){
+            threads[i] = std::thread(merge, i);
         }
-        //do 1 full cycle through the system
-    }while(firstId + N >= thisId && thisId >= firstId - N);
-
-    //end = std::chrono::system_clock::now();
-    //elapsed_seconds = end-start;
-    //timeOfMerges(countMerges) += elapsed_seconds.count();
-    //numOfMerges(countMerges) += 1;
-    //MergesAsFunctionOfMeanClusterSize(round(100*currentClusterSize)-1) += countMerges;
-    //numMergesAsFunctionOfMeanClusterSize(round(100*currentClusterSize)-1) += 1;
-
-    //move partciles according to velocities
-    x += dt * v;
-
-    for(int i = 0; i<N; i++){
-        if(x(i)-x_old(i)>L/2){
-            x_old(i)+=L;
+        for(int i = 0; i < numberOfBlocks; i++){
+            threads[i].join();
         }
-        if(x(i)-x_old(i)<-L/2){
-            x_old(i)-=L;
+
+        //perform merging of clusters across block borders &
+        //repeat until no more collisions are detected
+    }while(mergeCrossBlockBorders());
+
+    //advance time and particle positions in parallel
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i] = std::thread(advanceTime, i);
         }
-        //track particle positions without periodic boundaries for MSD calculation
-        x_noPB(i) += x(i)-x_old(i); 
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
+    }
+   
+    //apply periodic boundary conditions in parallel
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i] = std::thread(applyPeriodicBoundaryConditions, i);
+        }
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
     }
 
-    applyPeriodicBoundaryConditions();
-    checkConfiguration();
-
-    //measure current
-    current += arma::accu(v)*dt/L;
+    //check configuration in parallel
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i] = std::thread(checkConfiguration, i, "end of step");
+        }
+    for(int i = 0; i < numberOfBlocks; i++){
+        threads[i].join();
+    }
 }
 
 /**
- * @brief Performing the simulation for the equilibration time without output
- * 
- */
-void getEquilibriumState(){
-    double timePassed = 0;                              /*time passed since start of simulation*/
-    //run simulation for the equilibration time
-    while(timePassed < equilibrationTime){
-        doSingleTimeStep();
-        timePassed += dt;
-    }
-
-    //reset output variables
-    current = 0;
-    //numberOfSplits = 0;
-    //numberOfCollisions = 0;
-    //numberOfContacts = 0;
-
-    x_initial = x;
-    x_noPB = x;
-
-    //numOfMerges = arma::zeros<arma::vec>(N);
-    //numOfSplits = arma::zeros<arma::vec>(100*N);
-    //timeOfMerges = arma::zeros<arma::vec>(N);
-    //timeOfSplits = arma::zeros<arma::vec>(100*N);
-    //meanClusterSize  = 0;
-    //MergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
-    //numMergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
-}
-
-/**
- * @brief Run the Brownian dynamics simulation
+ * @brief Simulate the system for the given duration while performing measurements
  * 
  */
 void simulateSystem(){
-    double timePassed = 0;                              /*time passed since start of simulation*/
-    double tTrajectory = 0;                             /*time passed since last output of trajectory*/
-    double tCurrent = 0;                                /*time passed since last output of current*/
-    double tMSD = 0;                                    /*time passed since last output of MSD*/
-    double MSD;                                         /*mean square displacement*/
-    int value;                                          /*temporary variable for writing to file*/
-    bool forward = true;                                /*direction of jump*/
-    bool backward = false;                              /*direction of jump*/
+    double time = 0.0;                              /*current time*/
+    std::thread threads[numberOfBlocks];            /*array containing all threads*/
 
     //prepare output files
     boost::filesystem::create_directory("output/");
-    boost::filesystem::create_directories(outputPrefix);
-    FILE *trajectoryFile;
-    FILE *currentFile;
+    boost::filesystem::create_directory(outputPrefix);
     FILE *MSDFile;
-    std::string filename = outputPrefix+"/trajectory";
-    trajectoryFile = fopen(filename.c_str(), "w");
-    filename = outputPrefix+"/current";
-    currentFile = fopen(filename.c_str(), "w");
-    filename = outputPrefix+"/MSD";
+    std::string filename = outputPrefix+"/MSD";
     MSDFile = fopen(filename.c_str(), "w");
-    filename = outputPrefix+"/jump_particle.bin";
-    std::ofstream file_jump_particle(filename, std::ios::binary);
-    filename = outputPrefix+"/jump_time.bin";
-    std::ofstream file_jump_time(filename, std::ios::binary);
-    filename = outputPrefix+"/jump_direction.bin";
-    std::ofstream file_jump_direction(filename, std::ios::binary);
+    double tMSD = 0;
+    double totalMSD;
 
-    //run simulation for the total simulation time
-    while(timePassed < totalSimulationTime){
-        doSingleTimeStep();
-        //write jumps across potential barrier to file
-        if(save_all_jumps){
-            for(int i = 0; i < N; i++){
-                if(int(x(i))-int(x_old(i)) == 1){
-                    value = int(x_old(i));
-                    file_jump_particle.write(reinterpret_cast<char*>(&value), sizeof(value));
-                    file_jump_time.write(reinterpret_cast<char*>(&timePassed), sizeof(timePassed));
-                    file_jump_direction.write(reinterpret_cast<char*>(&forward), sizeof(forward));
-                }
-                if(int(x(i))-int(x_old(i)) == -1){
-                    value = int(x(i));
-                    file_jump_particle.write(reinterpret_cast<char*>(&value), sizeof(value));
-                    file_jump_time.write(reinterpret_cast<char*>(&timePassed), sizeof(timePassed));
-                    file_jump_direction.write(reinterpret_cast<char*>(&backward), sizeof(backward));
-                }
-            }
-            
+    //perform simulation
+    while(time < simulationDuration){
+        doStep();
+        time += dt;
+
+        //do measurements in parallel
+        for(int i = 0; i < numberOfBlocks; i++){
+            threads[i] = std::thread(doMeasurements, i);
         }
-        //update time
-        timePassed += dt;
-
-        //collect statistics for one-particle density
-        for(int i = 0; i < N; i++){
-            density((x(i) - floor(x(i))) * spatialSteps)++;
+        for(int i = 0; i < numberOfBlocks; i++){
+            threads[i].join();
         }
 
-        //collect statistics for two-particle density at contact
-        for(int i = 0; i < N; i++){
-            if(configuration(i) > 0){
-                if(fabs(getMinimumImageDistance(x((i-1+N)%N), x(i))) - sigma < delta){
-                        density_II((x((i-1+N)%N) - floor(x((i-1+N)%N))) * spatialSteps)++;
-                    }
-                if(configuration(i) > 1){
-                    i += configuration(i) - 1;
-                }
-            }
-        }
-
-        //output trajectory at each time interval tfTrajectory
-        tTrajectory += dt;
-        if (tTrajectory >= tfTrajectory) {
-            tTrajectory = 0.0;
-            fprintf(trajectoryFile, "%f, ", timePassed);
-            for(int i = 0; i < N-1; ++i){
-                fprintf(trajectoryFile, "%f, ", x(i));
-            }
-            fprintf(trajectoryFile, "%f\n", x(N-1));
-        }
-
-        //output current at each time interval tfCurrent
-        tCurrent += dt;
-        if (tCurrent >= tfCurrent) {
-            tCurrent  = 0.0;
-            fprintf(currentFile, "%f, ", timePassed);
-            fprintf(currentFile, "%f\n", current/timePassed);
-        }
-
-        //calculate mean square displacement
-        MSD = 0;
-        for(int i = 0; i < N; i++){
-            MSD += (x_noPB(i) - x_initial(i)) * (x_noPB(i) - x_initial(i));
-        }
-
-        //output MSD
+        //calculate MSD
         tMSD += dt;
         if (tMSD >= tfMSD) {
             tMSD  = 0.0;
             tfMSD *= 1.1;
-            fprintf(MSDFile, "%f, ", timePassed);
-            fprintf(MSDFile, "%f\n", MSD/N);
+
+            totalMSD = 0;
+            for(int i = 0; i < numberOfBlocks; i++){
+                totalMSD += MSD[i];
+            }
+
+            fprintf(MSDFile, "%f, ", time);
+            fprintf(MSDFile, "%f\n", totalMSD/N);
         }
-
-        //update number of contacts between particles
-        //for(int i = 0; i < N; i++){
-        //    if(configuration(i)==0 || configuration(i)>1){
-        //        numberOfContacts++;
-        //    }
-        //}
     }
-
-    //close output files
-    fclose(trajectoryFile);
-    fclose(currentFile);
+    //close output file
     fclose(MSDFile);
-    file_jump_particle.close();
-    file_jump_time.close();
-    file_jump_direction.close();
-
-    //normalize densities
-    density /= totalSimulationTime/dt*L*delta;
-    density_II /= totalSimulationTime/dt*L*delta*deltaPrime;
-    //timeOfMerges /= numOfMerges;
-    //timeOfSplits /= numOfSplits;
-    //MergesAsFunctionOfMeanClusterSize /= numMergesAsFunctionOfMeanClusterSize;
 }
 
 /**
- * @brief Print densities to file
+ * @brief Simulate the system for the given duration without performing measurements
+ * 
+ */
+void getEquilibriumState(){
+    double time = 0.0;
+    while(time < equilibrationTime){
+        doStep();
+        time += dt;
+    }
+
+    //reset starting positions for MSD calculation
+    for(int i = 0; i<N; i++){
+        x_initial[i] = x[i];
+        x_noPB[i] = x[i];
+    }
+}
+
+/**
+ * @brief Save the results of the simulation to output files
  * 
  */
 void saveResults(){
-    arma::mat output = arma::zeros<arma::mat>(spatialSteps, 2);
-    for(int i = 0; i < spatialSteps; i++){
-        output(i, 0) = i * delta;
-        output(i, 1) = density(i);
+    //prepare output files
+    boost::filesystem::create_directory("output/");
+    boost::filesystem::create_directory(outputPrefix);
+    FILE *currentFile;
+    FILE *DensityFile;
+    FILE *Density_IIFile;
+    std::string filename = outputPrefix+"/current";
+    currentFile = fopen(filename.c_str(), "w");
+    filename = outputPrefix+"/density";
+    DensityFile = fopen(filename.c_str(), "w");
+    filename = outputPrefix+"/density_II";
+    Density_IIFile = fopen(filename.c_str(), "w");
+
+    //get densities from all blocks
+    for(int i = spatialSteps; i<spatialSteps*numberOfBlocks; i++){
+        density[i%spatialSteps] += density[i];
+        density_II[i%spatialSteps] += density_II[i];
     }
-    output.save(outputPrefix+"/density", arma::raw_ascii);
 
-    /*for(int i = 0; i < spatialSteps; i++){
-        output(i, 1) = density_II(i);
+    //save one and two particle density profiles
+    for(int i = 0; i < spatialSteps; ++i){
+        fprintf(DensityFile, "%f, ", i * delta);
+        fprintf(DensityFile, "%f\n", density[i]/(simulationDuration/dt*L*delta));
+        fprintf(Density_IIFile, "%f, ", i * delta);
+        fprintf(Density_IIFile, "%f\n", density_II[i]/(simulationDuration/dt*L*delta*deltaPrime));
     }
-    output.save(outputPrefix+"/density_II", arma::raw_ascii);
 
-    output = arma::zeros<arma::mat>(100*N, 2);
-    for(int i = 0; i < 100*N; i++){
-        output(i, 0) = double(i) / double(100);
-        output(i, 1) = timeOfSplits(i);
+    //get particle current from all blocks
+    for(int i = 1; i < numberOfBlocks; i++){
+        current[0] += current[i];
     }
-    output.save(outputPrefix+"/timeOfSplits", arma::raw_ascii);
 
-    output = arma::zeros<arma::mat>(N, 2);
-    for(int i = 0; i < N; i++){
-        output(i, 0) = i;
-        output(i, 1) = timeOfMerges(i);
-    }
-    output.save(outputPrefix+"/timeOfMerges", arma::raw_ascii);
-
-    output = arma::zeros<arma::mat>(100*N, 2);
-    for(int i = 0; i < 100*N; i++){
-        output(i, 0) = double(i) / double(100);
-        output(i, 1) = MergesAsFunctionOfMeanClusterSize(i);
-    }
-    output.save(outputPrefix+"/MergesAsFunctionOfMeanClusterSize", arma::raw_ascii);
-
-    arma::vec splitsAndCollisions = arma::zeros<arma::vec>(2);
-    splitsAndCollisions(0) = numberOfSplits/totalSimulationTime*dt;
-    splitsAndCollisions(1) = numberOfCollisions/totalSimulationTime*dt;
-    splitsAndCollisions.save(outputPrefix+"/splitsAndCollsiions", arma::raw_ascii);
-
-    arma::vec meanCS = arma::zeros<arma::vec>(1);
-    meanCS(0) = meanClusterSize/totalSimulationTime;
-    meanCS.save(outputPrefix+"/meanClusterSize", arma::raw_ascii);
-
-    arma::vec contacts = arma::zeros<arma::vec>(1);
-    contacts(0) = double(numberOfContacts)/totalSimulationTime*dt;
-    contacts.save(outputPrefix+"/numberOfContacts", arma::raw_ascii);*/
+    //save particle current
+    fprintf(currentFile, "%f", current[0]*dt/L/simulationDuration);
+    
+    //close output files
+    fclose(currentFile);
+    fclose(DensityFile);
+    fclose(Density_IIFile);
 }
 
 /**
@@ -787,7 +1026,7 @@ void loadInput(){
 
     desc.add_options()
     ("help", "Print help messages") 
-    ("totaltime,t", po::value<double>(&totalSimulationTime), "Total time of simulation.")
+    ("totaltime,t", po::value<double>(&simulationDuration), "Total time of simulation.")
     ("particles,N", po::value<int>(&N), "Number of particles.")
     ("length,L", po::value<int>(&L), "Length of the simulated system.")
     ("diameter,sigma", po::value<double>(&sigma), "Diameter of hard rods.")
@@ -796,7 +1035,7 @@ void loadInput(){
     ("force,f", po::value<double>(&f), "Amplitude of constants drag force.")
     ("AmpU,U", po::value<double>(&U0), "Amplitude of external periodic potential.")
     ("gamma,stickyness", po::value<double>(&Gamma), "Adhesive interaction strength.")
-    ("order", po::value<int>(&order), "Polynomial order of the representation of the delta function.")
+    ("order", po::value<double>(&order), "Polynomial order of the representation of the delta function.")
     ("epsilon", po::value<double>(&epsilon), "Range of the representation of the delta function.")
     ("eqtime", po::value<double>(&equilibrationTime), "Equilibration time before sampling starts.")
     ("tCurrent", po::value<double>(&tfCurrent), "Time interval of outputting the current.")
@@ -811,7 +1050,7 @@ void loadInput(){
     po::store(boost::program_options::parse_config_file(file,desc),vm);
     po::notify(vm);
 
-    std::cout<<"totaltime: "<<totalSimulationTime<<std::endl;
+    std::cout<<"totaltime: "<<simulationDuration<<std::endl;
     std::cout<<"N = "<<N<<std::endl;
     std::cout<<"L = "<<L<<std::endl;
     std::cout<<"sigma = "<<sigma<<std::endl;
@@ -835,13 +1074,14 @@ void loadInput(){
 
 /**
  * @brief Simulate Baxter's adhesive hard spheres and 
- * pure hard spheres (gamma = 0) in an external cosine potential
+ * pure hard spheres (gamma = 0)
  * 
  * @param argc 
  * @param input path to configuration file
  * @return int 
  */
 int main(int argc, char** input){
+
     //check if a configuration file is provided
     if(argc > 1){
         cfgFile = input[1];
@@ -851,7 +1091,7 @@ int main(int argc, char** input){
     loadInput();
 
     //initialize the simulation
-    initialConfiguration();
+    initialize();
 
     //run simulation until equilibrium is reached
     getEquilibriumState();
@@ -859,7 +1099,7 @@ int main(int argc, char** input){
     //save start time
     auto start = std::chrono::system_clock::now();
 
-    //run the simulation
+    //run simulation and perform measurements
     simulateSystem();
 
     //save end time
@@ -869,8 +1109,12 @@ int main(int argc, char** input){
     std::chrono::duration<double> elapsed_seconds = end-start;
 
     //print computation time
-    std::cout<<"Computation time: "<<elapsed_seconds.count()<<" s"<<std::endl;
+    std::cout<<elapsed_seconds.count()<<" s"<<std::endl;
 
     //save results
     saveResults();
+    
+    //clean up memory
+    cleanUp();
+    return 0;
 }
