@@ -144,7 +144,8 @@ void establishBlocks(){
     
 
     //initialize rngs
-    srand (time(NULL));
+    srand(time(NULL));
+
     int *seeds;
     cudaMallocManaged(&seeds, numberOfGeneralizedIds * sizeof(int));
     for(int i = 0; i < numberOfGeneralizedIds; i++){
@@ -155,6 +156,7 @@ void establishBlocks(){
     cudaDeviceSynchronize();
     cudaFree(seeds);
     initializeGPU<<<1,1>>>(blockSize, blockStart, numberOfGeneralizedIds, crossBorderCollisions, collisionHappened, N, identification, collision, x, v, anyCollisionHappened, current, densityProfile, deltaSteps, L);
+    cudaDeviceSynchronize();
 }
 
 /**
@@ -607,9 +609,27 @@ void printState(){
 __global__ void measureDensity(int *blockStart, int *blockSize, double *densityProfile, double *x, int deltaSteps){
     int generalizedId = blockIdx.x*blockDim.x+threadIdx.x;
     int pos;
+    int index;
     for(int i = 0; i < blockSize[generalizedId]; i++){
         pos = i + blockStart[generalizedId];
-        densityProfile[int(round((x[pos] - floor(x[pos]) + generalizedId) * deltaSteps))] += 1;
+        index = int((x[pos] - floor(x[pos]) + generalizedId) * deltaSteps);
+        densityProfile[index] += 1;
+    }
+}
+
+/**
+ * @brief Verifies integrity of particle positions and velocities
+ * 
+ */
+__global__ void checkPositions(double* x, int N, double *v, int *blockStart, int *blockSize) {
+    int generalizedId = blockIdx.x*blockDim.x+threadIdx.x;
+    int pos;
+    for(int i = 0; i < blockSize[generalizedId]; i++){
+        pos = i + blockStart[generalizedId];
+        if(isnan(x[pos]) || isinf(x[pos]) || isnan(v[pos]) || isinf(v[pos])){
+            printf("x[%d] = %f\n", pos, x[pos]);
+            printf("v[%d] = %f\n", pos, v[pos]);
+        }
     }
 }
 
@@ -619,11 +639,13 @@ __global__ void measureDensity(int *blockStart, int *blockSize, double *densityP
  */
 void doStep(){
     //calculate new particle velocities
+    cudaDeviceSynchronize();
     particleVelocities<<<numberOfBlocks,numberOfThreads>>>(order, epsilon, Gamma, sigma, blockSize, blockStart, v, x, N, L, f, U0, generatorStates, dt, D);
     cudaDeviceSynchronize();
 
     //split clusters according to the forces exerted on the particles
     splitClusters<<<numberOfBlocks,numberOfThreads>>>(blockSize, blockStart, v, x, identification, N);
+    cudaDeviceSynchronize();
 
     //update cluster velocities
     clusterVelocities<<<numberOfBlocks,numberOfThreads>>>(blockSize, blockStart, v, N, identification);
@@ -665,7 +687,9 @@ void doStep(){
  * 
  */
 void simulateSystem(){
+    std::cout<<"Simulation"<<std::endl;
     cudaDeviceSynchronize();
+    
     double time = 0.0;
     while(time < simulationDuration){
         doStep();
@@ -679,14 +703,16 @@ void simulateSystem(){
  * 
  */
 void getEquilibriumState(){
+    std::cout<<"Equilibration"<<std::endl;
     cudaDeviceSynchronize();
+
     double time = 0.0;
     while(time < equilibrationTime){
         doStep();
         time += dt;
     }
     cudaDeviceSynchronize();
-
+    
     //reset measurements
     for(int i = 0; i < numberOfGeneralizedIds; i++){
         current[i] = 0;
@@ -831,6 +857,11 @@ int main(int argc, char** input){
 
     //clean up memory
     cleanUp();
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("CUDA error: ") + cudaGetErrorString(err));
+    }
     return 0;
 }
 
