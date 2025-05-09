@@ -1,5 +1,5 @@
 # Fast Brownian cluster dynamics (BCD)
-Simulation of Brownian dynamics based on cluster dynamics. This implementation is usable for one dimensional systems of hard rods with and without adhesive contact interaction. For a detailed description see https://www.doi.org/10.1103/PhysRevE.106.054606 and https://www.doi.org/10.1016/j.cpc.2024.109474.
+Simulation of Brownian dynamics based on cluster dynamics. This implementation is usable for one dimensional systems of hard rods with and without adhesive contact interaction. For a detailed description see https://doi.org/10.1103/PhysRevE.106.054606 and https://www.doi.org/10.1016/j.cpc.2024.109474.
 
 # Citation 
 If you use our code for your own research, we ask you to cite the following paper:
