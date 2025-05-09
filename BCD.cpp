@@ -1,7 +1,7 @@
 /*
 The MIT License
 
-Copyright © 2024 Alexander P. Antonov, Sören Schweers, Artem Ryabov, and Philipp Maass
+Copyright © 2025 Alexander P. Antonov, Sören Schweers, Artem Ryabov, and Philipp Maass
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this
 software and associated documentation files (the “Software”), to deal in the Software
@@ -46,45 +46,37 @@ boost::variate_generator<boost::mt19937&, boost::normal_distribution<> > randNor
 boost::random::mt19937 Generator2((std::chrono::system_clock::now().time_since_epoch()).count());
 boost::variate_generator<boost::mt19937&, boost::uniform_01<> > randUniform(Generator2, boost::uniform_01<>());
 
-arma::vec x;                                        /*particle positions*/                                            
-arma::vec x_initial;                                /*initial particle positions*/
-arma::vec x_noPB;                                   /*particle positions without periodic boundaries*/ 
-arma::vec x_old;                                    /*old particle positions*/ 
-arma::vec v;                                        /*particle velocities*/   
+std::vector<long double> x;                         /*particle positions*/                                            
+std::vector<long double> x_initial;                 /*initial particle positions*/
+std::vector<long double> x_noPB;                    /*particle positions without periodic boundaries*/ 
+std::vector<long double> x_old;                     /*old particle positions*/ 
+std::vector<long double> v;                         /*particle velocities*/   
 arma::vec configuration;                            /*cluster identification:   1 = independent particle
                                                                                 0 = particle is inside of a cluster
                                                                                 2, 3, .., N = first particle of a cluster with this length
                                                                                 -2, -3, .., -N = last particle of a cluster with this length*/
-
-//arma::vec numOfMerges;                              /*counter for the number of merges*/
-//arma::vec numOfSplits;                              /*counter for the number of splits*/
-//arma::vec timeOfMerges;                             /*total computation time of merges*/
-//arma::vec timeOfSplits;                             /*total computation time of splits*/
-//double meanClusterSize;                             /*mean cluster size*/
-//arma::vec MergesAsFunctionOfMeanClusterSize;        /*number of merges as a function of the mean cluster size*/
-//arma::vec numMergesAsFunctionOfMeanClusterSize;     /*how often does a certain mean cluster size occur after merging*/
 bool save_all_jumps = false;                        /*write every jump across potential barrier to file*/
 
 arma::vec density;                                  /*one-partcile density*/
 arma::vec density_II;                               /*two-particle density at contact*/
 int spatialSteps;                                   /*spatial resolution when measuring densities*/
-double current;                                     /*particle current*/
+long double current;                                /*particle current*/
 
-double pi = boost::math::double_constants::pi;      /*pi*/
+long double pi = boost::math::double_constants::pi; /*pi*/
 arma::vec deterministicForce;                       /*external force*/
 arma::vec interactionForce;                         /*interaction force*/
 int forceSteps = 1000000;                           /*spatial resolution for pre-calculated forces*/
 
-double U0 = 6;                                      /*amplitude of cosine potentail*/
-double D = 1;                                       /*diffusion coefficient*/
-double sigma = 0.5;                                 /*particle size*/
+long double U0 = 6;                                 /*amplitude of cosine potentail*/
+long double D = 1;                                  /*diffusion coefficient*/
+long double sigma = 0.5;                            /*particle size*/
 int L = 100;                                        /*system length*/
 int N = 50;                                         /*number of particles*/
 double Gamma = 1.0;                                 /*amplitude of adhesive interaction*/
 int order = 3;                                      /*order of polynomial representation of delta function*/
 double epsilon = 0.05;                              /*range of adhesive interaction*/
-double dt = 0.001;                                  /*time step*/
-double f = 0;                                       /*constant drag force*/
+long double dt = 0.001;                                  /*time step*/
+long double f = 0;                                       /*constant drag force*/
 double delta = 0.001;                               /*spatial resolition for measuring denity and two-particle-density at contact*/
 double deltaPrime = delta;                          /*spatial resolition for measuring two-particle-density at contact*/
 double equilibrationTime = 1000.0;                  /*time to run th esimulation before starting measurements*/
@@ -95,10 +87,6 @@ double tfMSD = 0.001;                               /*time between outputting th
 std::string outputPrefix = "";                      /*prefix of output (folder name)*/
 std::string cfgFile = "basep.cfg";                  /*default file name of configuration parameters*/
 
-//double numberOfSplits;                              /*count the number of splits*/
-//double numberOfCollisions;                          /*count number of collisions*/
-//long numberOfContacts;                              /*count number of contact between particles*/
-
 /**
  * @brief Maps the particle position back into the central image box according to the boundary conditions.
  * 
@@ -106,10 +94,10 @@ std::string cfgFile = "basep.cfg";                  /*default file name of confi
 void applyPeriodicBoundaryConditions(){
     for(int i = 0; i < N; ++i){
         // Apply periodic boundary conditions
-        if(x(i)>= L){
-            x(i) -= L;
-        }else if(x(i) < 0.0){
-            x(i) += L;
+        if(x[i]>= L){
+            x[i] -= L;
+        }else if(x[i] < 0.0){
+            x[i] += L;
         }
     }
 }
@@ -137,31 +125,26 @@ double getMeanClusterSize(){
  */
 void initialConfiguration(){
     spatialSteps = int(round(1/delta));             
-    x = arma::zeros<arma::vec>(N);
-    x_initial = arma::zeros<arma::vec>(N);
-    x_noPB = arma::zeros<arma::vec>(N);
-    v = arma::zeros<arma::vec>(N);
+    x.reserve(N);
+    x_initial.reserve(N);
+    x_noPB.reserve(N);
+    x_old.reserve(N);
+    v.reserve(N);
     current = 0;
-
-    //numOfMerges = arma::zeros<arma::vec>(N);
-    //numOfSplits = arma::zeros<arma::vec>(100*N);
-    //timeOfMerges = arma::zeros<arma::vec>(N);
-    //timeOfSplits = arma::zeros<arma::vec>(100*N);
-    //meanClusterSize  = 0;
-    //MergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
-    //numMergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
 
     //initalize configuration: all particles are independent
     configuration = arma::ones<arma::vec>(N);
 
     /*Windows for each particle position are calculated so that there are no conflicts.
     Particle positions are put in each window according to a uniform distribution.*/
-    for (int i = 0; i < N; ++i) {
-        x(i) = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
+    for(int i = 0; i < N; ++i) {
+        x[i] = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
     }
 
-    x_initial = x;
-    x_noPB = x;
+    for(int i = 0; i < N; ++i){
+        x_initial[i] = x[i];
+        x_noPB[i] = x[i];
+    }
 
     //initialize one/two-particle densities
     density = arma::zeros<arma::vec>(spatialSteps);
@@ -186,10 +169,6 @@ void initialConfiguration(){
             interactionForce(i) = -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
         }
     }
-
-    //numberOfSplits = 0;
-    //numberOfCollisions = 0;
-    //numberOfContacts = 0;
 }
 
 /**
@@ -197,10 +176,10 @@ void initialConfiguration(){
  * 
  * @param xi position of first particle
  * @param xj position of second particle
- * @return double 
+ * @return long double 
  */
-double getMinimumImageDistance(double xi, double xj){
-        double dx = xi - xj;
+long double getMinimumImageDistance(long double xi, long double xj){
+        long double dx = xi - xj;
         if (dx < 0)
             dx = -dx;
         if (dx < 0.5 * L)
@@ -220,16 +199,16 @@ void particleVelocities(){
     for(int i = 0; i < N; i++){
         interaction = 0;
         //get interaction forces, if particles are within interaction range epsilon
-        distance = getMinimumImageDistance(x(i), x((i-1+N)%N));
+        distance = getMinimumImageDistance(x[i], x[(i-1+N)%N]);
         if(distance < sigma + epsilon){
             interaction += interactionForce(int(round((distance-sigma)*forceSteps)));
         }
-        distance = getMinimumImageDistance(x((i+1)%N), x(i));
+        distance = getMinimumImageDistance(x[(i+1)%N], x[i]);
         if(distance < sigma + epsilon){
             interaction -= interactionForce(int(round((distance-sigma)*forceSteps)));
         }
         //calculate particle velocity
-        v(i) = deterministicForce((x(i) - floor(x(i))) * forceSteps) + interaction + sqrt(2*D/dt)*randNormal();
+        v[i] = deterministicForce((x[i] - floor(x[i])) * forceSteps) + interaction + sqrt(2*D/dt)*randNormal();
     }
 }
 
@@ -241,12 +220,12 @@ void clusterVelocities(){
     for(int i = 0; i < N; i++){
         if(configuration(i)>0){
             for(int j = 1; j < configuration(i); j++){
-                v(i) += v((i+j)%N);
+                v[i] += v[(i+j)%N];
             }
-            v(i) /= configuration(i);
+            v[i] /= configuration(i);
 
             for(int j = 1; j < configuration(i); j++){
-                v((i+j)%N) = v(i);
+                v[(i+j)%N] = v[i];
             }
         }
     }
@@ -257,11 +236,11 @@ void clusterVelocities(){
  * 
  */
 void splitClusters(){ 
-    double forceLeft;                               /*total force on the left subcluster*/
-    double forceRight;                              /*total force on the right subcluster*/
+    long double forceLeft;                               /*total force on the left subcluster*/
+    long double forceRight;                              /*total force on the right subcluster*/
 
     int relativePosOfBiggestDifference;             /*position of potential split*/
-    double lowestInteractionForce;                  /*lowest difference of the interaction forces of the two subclusters found so far*/
+    long double lowestInteractionForce;                  /*lowest difference of the interaction forces of the two subclusters found so far*/
 
     int firstIndependentCluster = -1;               /*index of the first cluster*/
     int totalChecks = N;                            /*total number of particles to check*/
@@ -286,14 +265,14 @@ void splitClusters(){
 
             //calculate total force exerted on the cluster
             for(int j = 0; j < configuration(i); j++){
-                forceRight += v((i+j)%N);
+                forceRight += v[(i+j)%N];
             }
 
             //calculate forces on two subclusters for all possible splitting positions
             for(int j = 0; j < configuration(i)-1; j++){ /*added -1 to fix this (#connections = #particles - 1)*/
                 //update forces of both subclusters
-                forceRight -= v((i+j)%N);
-                forceLeft += v((i+j)%N);
+                forceRight -= v[(i+j)%N];
+                forceLeft += v[(i+j)%N];
 
                 //find the pair of subclusters for which the velocity difference is the largest
                 if(forceLeft/(j+1) - forceRight/(configuration(i)-j-1) < lowestInteractionForce){
@@ -317,7 +296,6 @@ void splitClusters(){
                 if(configuration((i+relativePosOfBiggestDifference+1)%N) > 1){
                     configuration((i+relativePosOfBiggestDifference+1+int(configuration((i+relativePosOfBiggestDifference+1)%N))-1)%N) = - configuration((i+relativePosOfBiggestDifference+1)%N);
                 }
-                //numberOfSplits += 1;
             } 
         }
     }
@@ -330,18 +308,18 @@ void splitClusters(){
  */
 void checkConfiguration(){
     for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -12)/dt) {
+        if (fabs(getMinimumImageDistance(x[i+1], x[i])) - sigma < -pow(10, -12)/dt) {
             printf("Distance violated: %d, %d \n", i, i+1);
             std::cout.precision(17);
-            std::cout<<x(i+1)<<", "<< x(i)<<std::endl;
-            std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
+            std::cout<<x[i+1]<<", "<< x[i]<<std::endl;
+            std::cout<<fabs(getMinimumImageDistance(x[i], x[i+1]))- sigma<<std::endl;
             exit(EXIT_FAILURE);
         }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -12)/dt) {
+		if (fabs(getMinimumImageDistance(x[N-1], x[0])) - sigma < -pow(10, -12)/dt) {
             printf("Distance violated: %d, %d \n", N-1, 0);
             std::cout.precision(17);
-            std::cout<<x(N-1)<<", "<< x(0)<<std::endl;
-            std::cout<<fabs(getMinimumImageDistance(x(N-1), x(0)))- sigma<<std::endl;
+            std::cout<<x[N-1]<<", "<< x[0]<<std::endl;
+            std::cout<<fabs(getMinimumImageDistance(x[N-1], x[0]))- sigma<<std::endl;
             exit(EXIT_FAILURE);
     }
 }
@@ -352,10 +330,10 @@ void checkConfiguration(){
  * @param id of the first particle of the cluster
  * @return double 
  */
-double getClusterCM(int id){
+long double getClusterCM(int id){
     id += 2*N;
     id = id%N;
-    return x(id) * configuration(id) + sigma * ((configuration(id)-1) * configuration(id)) / 2;
+    return x[id] * configuration(id) + sigma * ((configuration(id)-1) * configuration(id)) / 2;
 }
 
 /**
@@ -364,10 +342,10 @@ double getClusterCM(int id){
  * @param id of the first particle of the cluster
  * @return double 
  */
-double getClusterV(int id){
+long double getClusterV(int id){
     id += 2*N;
     id = id%N;
-    return v(id) * configuration(id);
+    return v[id] * configuration(id);
 }
 
 /**
@@ -402,41 +380,30 @@ int getLeftId(int id){
  */
 void doSingleTimeStep(){ 
     //remember old particle positions
-    x_old = x;
-
-    //double currentClusterSize = getMeanClusterSize();
-    //meanClusterSize += currentClusterSize * dt;
-    //int countMerges = 0;
+    for (int i = 0; i < N; i++){
+        x_old[i] = x[i];
+    }
 
     //calculate new particle velocities
     particleVelocities();
 
-    //auto start = std::chrono::system_clock::now();
-
     //cluster analysis (fragmentation)
     splitClusters();
 
-    //auto end = std::chrono::system_clock::now();
-    //std::chrono::duration<double> elapsed_seconds = end-start;
-    //timeOfSplits(round(100*currentClusterSize)-1) += elapsed_seconds.count();
-    //numOfSplits(round(100*currentClusterSize)-1) += 1;
-
     //calculate cluster velocities based on forces exerted on particles and cluster identification
     clusterVelocities();
-    
-    //start = std::chrono::system_clock::now();
 
     //keep 3 neighboring clusters in memory at all times
     int thisId, thisSize;
-    double thisCM, thisV;
+    long double thisCM, thisV;
 
     int leftId, leftSize;
-    double leftCM, leftV;
+    long double leftCM, leftV;
 
     int rightId, rightSize;
-    double rightCM, rightV;
+    long double rightCM, rightV;
 
-    double dx, dv;
+    long double dx, dv;
     int collisionHappened = 0;
     int firstId;
 
@@ -493,16 +460,13 @@ void doSingleTimeStep(){
 
             //remember that  collision happened
             collisionHappened = 1;
-
-            //numberOfCollisions += 1;
-            //countMerges += 1;
         }else{
             //if a merge happened but no further merges are detected for the same cluster at this time, update the configuration
             if(collisionHappened > 0){
                 for(int i = 0; i<rightSize; i++){
                     configuration((i+rightId+N)%N) = 0;
-                    v((i+rightId+N)%N) = rightV/rightSize;
-                    x((i+rightId+N)%N) = rightCM/rightSize + sigma * double(2*i-rightSize+1)/2;
+                    v[(i+rightId+N)%N] = rightV/rightSize;
+                    x[(i+rightId+N)%N] = rightCM/rightSize + sigma * double(2*i-rightSize+1)/2;
                 }
                 configuration((rightId+N)%N) = rightSize;
                 configuration((rightId+rightSize-1+N)%N) = -rightSize;
@@ -532,32 +496,29 @@ void doSingleTimeStep(){
         //do 1 full cycle through the system
     }while(firstId + N >= thisId && thisId >= firstId - N);
 
-    //end = std::chrono::system_clock::now();
-    //elapsed_seconds = end-start;
-    //timeOfMerges(countMerges) += elapsed_seconds.count();
-    //numOfMerges(countMerges) += 1;
-    //MergesAsFunctionOfMeanClusterSize(round(100*currentClusterSize)-1) += countMerges;
-    //numMergesAsFunctionOfMeanClusterSize(round(100*currentClusterSize)-1) += 1;
-
     //move partciles according to velocities
-    x += dt * v;
+    for(int i = 0; i<N; i++){
+        x[i] += dt * v[i];
+    }
 
     for(int i = 0; i<N; i++){
-        if(x(i)-x_old(i)>L/2){
-            x_old(i)+=L;
+        if(x[i]-x_old[i]>L/2){
+            x_old[i]+=L;
         }
-        if(x(i)-x_old(i)<-L/2){
-            x_old(i)-=L;
+        if(x[i]-x_old[i]<-L/2){
+            x_old[i]-=L;
         }
         //track particle positions without periodic boundaries for MSD calculation
-        x_noPB(i) += x(i)-x_old(i); 
+        x_noPB[i] += x[i]-x_old[i]; 
     }
 
     applyPeriodicBoundaryConditions();
     checkConfiguration();
 
     //measure current
-    current += arma::accu(v)*dt/L;
+    for(int i = 0; i < N; i++){
+        current += v[i]*dt/L;
+    }
 }
 
 /**
@@ -574,20 +535,11 @@ void getEquilibriumState(){
 
     //reset output variables
     current = 0;
-    //numberOfSplits = 0;
-    //numberOfCollisions = 0;
-    //numberOfContacts = 0;
 
-    x_initial = x;
-    x_noPB = x;
-
-    //numOfMerges = arma::zeros<arma::vec>(N);
-    //numOfSplits = arma::zeros<arma::vec>(100*N);
-    //timeOfMerges = arma::zeros<arma::vec>(N);
-    //timeOfSplits = arma::zeros<arma::vec>(100*N);
-    //meanClusterSize  = 0;
-    //MergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
-    //numMergesAsFunctionOfMeanClusterSize = arma::zeros<arma::vec>(100*N);
+    for(int i = 0; i < N; ++i){
+        x_initial[i] = x[i];
+        x_noPB[i] = x[i];
+    }
 }
 
 /**
@@ -629,14 +581,14 @@ void simulateSystem(){
         //write jumps across potential barrier to file
         if(save_all_jumps){
             for(int i = 0; i < N; i++){
-                if(int(x(i))-int(x_old(i)) == 1){
-                    value = int(x_old(i));
+                if(int(x[i])-int(x_old[i]) == 1){
+                    value = int(x_old[i]);
                     file_jump_particle.write(reinterpret_cast<char*>(&value), sizeof(value));
                     file_jump_time.write(reinterpret_cast<char*>(&timePassed), sizeof(timePassed));
                     file_jump_direction.write(reinterpret_cast<char*>(&forward), sizeof(forward));
                 }
-                if(int(x(i))-int(x_old(i)) == -1){
-                    value = int(x(i));
+                if(int(x[i])-int(x_old[i]) == -1){
+                    value = int(x[i]);
                     file_jump_particle.write(reinterpret_cast<char*>(&value), sizeof(value));
                     file_jump_time.write(reinterpret_cast<char*>(&timePassed), sizeof(timePassed));
                     file_jump_direction.write(reinterpret_cast<char*>(&backward), sizeof(backward));
@@ -649,14 +601,14 @@ void simulateSystem(){
 
         //collect statistics for one-particle density
         for(int i = 0; i < N; i++){
-            density((x(i) - floor(x(i))) * spatialSteps)++;
+            density((x[i] - floor(x[i])) * spatialSteps)++;
         }
 
         //collect statistics for two-particle density at contact
         for(int i = 0; i < N; i++){
             if(configuration(i) > 0){
-                if(fabs(getMinimumImageDistance(x((i-1+N)%N), x(i))) - sigma < delta){
-                        density_II((x((i-1+N)%N) - floor(x((i-1+N)%N))) * spatialSteps)++;
+                if(fabs(getMinimumImageDistance(x[(i-1+N)%N], x[i])) - sigma < delta){
+                        density_II((x[(i-1+N)%N] - floor(x[(i-1+N)%N])) * spatialSteps)++;
                     }
                 if(configuration(i) > 1){
                     i += configuration(i) - 1;
@@ -670,9 +622,9 @@ void simulateSystem(){
             tTrajectory = 0.0;
             fprintf(trajectoryFile, "%f, ", timePassed);
             for(int i = 0; i < N-1; ++i){
-                fprintf(trajectoryFile, "%f, ", x(i));
+                fprintf(trajectoryFile, "%.15Lf, ", x[i]);
             }
-            fprintf(trajectoryFile, "%f\n", x(N-1));
+            fprintf(trajectoryFile, "%.15Lf\n", x[N-1]);
         }
 
         //output current at each time interval tfCurrent
@@ -680,13 +632,13 @@ void simulateSystem(){
         if (tCurrent >= tfCurrent) {
             tCurrent  = 0.0;
             fprintf(currentFile, "%f, ", timePassed);
-            fprintf(currentFile, "%f\n", current/timePassed);
+            fprintf(currentFile, "%.15Lf\n", current/timePassed);
         }
 
         //calculate mean square displacement
         MSD = 0;
         for(int i = 0; i < N; i++){
-            MSD += (x_noPB(i) - x_initial(i)) * (x_noPB(i) - x_initial(i));
+            MSD += (x_noPB[i] - x_initial[i]) * (x_noPB[i] - x_initial[i]);
         }
 
         //output MSD
@@ -697,13 +649,6 @@ void simulateSystem(){
             fprintf(MSDFile, "%f, ", timePassed);
             fprintf(MSDFile, "%f\n", MSD/N);
         }
-
-        //update number of contacts between particles
-        //for(int i = 0; i < N; i++){
-        //    if(configuration(i)==0 || configuration(i)>1){
-        //        numberOfContacts++;
-        //    }
-        //}
     }
 
     //close output files
@@ -717,9 +662,6 @@ void simulateSystem(){
     //normalize densities
     density /= totalSimulationTime/dt*L*delta;
     density_II /= totalSimulationTime/dt*L*delta*deltaPrime;
-    //timeOfMerges /= numOfMerges;
-    //timeOfSplits /= numOfSplits;
-    //MergesAsFunctionOfMeanClusterSize /= numMergesAsFunctionOfMeanClusterSize;
 }
 
 /**
@@ -733,45 +675,6 @@ void saveResults(){
         output(i, 1) = density(i);
     }
     output.save(outputPrefix+"/density", arma::raw_ascii);
-
-    /*for(int i = 0; i < spatialSteps; i++){
-        output(i, 1) = density_II(i);
-    }
-    output.save(outputPrefix+"/density_II", arma::raw_ascii);
-
-    output = arma::zeros<arma::mat>(100*N, 2);
-    for(int i = 0; i < 100*N; i++){
-        output(i, 0) = double(i) / double(100);
-        output(i, 1) = timeOfSplits(i);
-    }
-    output.save(outputPrefix+"/timeOfSplits", arma::raw_ascii);
-
-    output = arma::zeros<arma::mat>(N, 2);
-    for(int i = 0; i < N; i++){
-        output(i, 0) = i;
-        output(i, 1) = timeOfMerges(i);
-    }
-    output.save(outputPrefix+"/timeOfMerges", arma::raw_ascii);
-
-    output = arma::zeros<arma::mat>(100*N, 2);
-    for(int i = 0; i < 100*N; i++){
-        output(i, 0) = double(i) / double(100);
-        output(i, 1) = MergesAsFunctionOfMeanClusterSize(i);
-    }
-    output.save(outputPrefix+"/MergesAsFunctionOfMeanClusterSize", arma::raw_ascii);
-
-    arma::vec splitsAndCollisions = arma::zeros<arma::vec>(2);
-    splitsAndCollisions(0) = numberOfSplits/totalSimulationTime*dt;
-    splitsAndCollisions(1) = numberOfCollisions/totalSimulationTime*dt;
-    splitsAndCollisions.save(outputPrefix+"/splitsAndCollsiions", arma::raw_ascii);
-
-    arma::vec meanCS = arma::zeros<arma::vec>(1);
-    meanCS(0) = meanClusterSize/totalSimulationTime;
-    meanCS.save(outputPrefix+"/meanClusterSize", arma::raw_ascii);
-
-    arma::vec contacts = arma::zeros<arma::vec>(1);
-    contacts(0) = double(numberOfContacts)/totalSimulationTime*dt;
-    contacts.save(outputPrefix+"/numberOfContacts", arma::raw_ascii);*/
 }
 
 /**
@@ -790,11 +693,11 @@ void loadInput(){
     ("totaltime,t", po::value<double>(&totalSimulationTime), "Total time of simulation.")
     ("particles,N", po::value<int>(&N), "Number of particles.")
     ("length,L", po::value<int>(&L), "Length of the simulated system.")
-    ("diameter,sigma", po::value<double>(&sigma), "Diameter of hard rods.")
-    ("DiffusionConstant,D", po::value<double>(&D), "Diffusion constant.")
-    ("timestep,dt", po::value<double>(&dt), "Timestep for Langevin-Euler-Scheme.")
-    ("force,f", po::value<double>(&f), "Amplitude of constants drag force.")
-    ("AmpU,U", po::value<double>(&U0), "Amplitude of external periodic potential.")
+    ("diameter,sigma", po::value<long double>(&sigma), "Diameter of hard rods.")
+    ("DiffusionConstant,D", po::value<long double>(&D), "Diffusion constant.")
+    ("timestep,dt", po::value<long double>(&dt), "Timestep for Langevin-Euler-Scheme.")
+    ("force,f", po::value<long double>(&f), "Amplitude of constants drag force.")
+    ("AmpU,U", po::value<long double>(&U0), "Amplitude of external periodic potential.")
     ("gamma,stickyness", po::value<double>(&Gamma), "Adhesive interaction strength.")
     ("order", po::value<int>(&order), "Polynomial order of the representation of the delta function.")
     ("epsilon", po::value<double>(&epsilon), "Range of the representation of the delta function.")
