@@ -1,7 +1,7 @@
 /*
 The MIT License
 
-Copyright © 2022 Alexander P. Antonov, Sören Schweers, Artem Ryabov, and Philipp Maass
+Copyright © 2025 Alexander P. Antonov, Sören Schweers, Artem Ryabov, and Philipp Maass
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this
 software and associated documentation files (the “Software”), to deal in the Software
@@ -22,11 +22,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include <armadillo>
+
+#include <iostream>
 #include <boost/program_options.hpp>
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/normal_distribution.hpp>
 #include <boost/random.hpp>
 #include <boost/math/constants/constants.hpp>
+#include <boost/math/distributions/uniform.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/math/constants/constants.hpp>
+#include <boost/filesystem/operations.hpp>
+#include <boost/filesystem/path.hpp>
+#include <boost/filesystem/fstream.hpp>
+#include <chrono>
 
 //generator for random numbers (normal distribution)
 boost::random::mt19937 Generator1((std::chrono::system_clock::now().time_since_epoch()).count());
@@ -36,71 +45,61 @@ boost::variate_generator<boost::mt19937&, boost::normal_distribution<> > randNor
 boost::random::mt19937 Generator2((std::chrono::system_clock::now().time_since_epoch()).count());
 boost::variate_generator<boost::mt19937&, boost::uniform_01<> > randUniform(Generator2, boost::uniform_01<>());
 
-arma::vec x;                                        /*particle positions*/  
-arma::vec x_initial;                                /*initial particle positions*/
-arma::vec x_noPB;                                   /*particle positions without periodic boundaries*/                                         
-arma::vec v;                                        /*particle velocities*/    
-arma::vec configuration;                            /*cluster identification: 1 = independent particle; 0 = particle is part of a cluster; 2,3,..,N = first particle of a cluster with this length*/
+std::vector<long double> x;                         /*particle positions*/                                            
+std::vector<long double> x_initial;                 /*initial particle positions*/
+std::vector<long double> x_noPB;                    /*particle positions without periodic boundaries*/ 
+std::vector<long double> x_old;                     /*old particle positions*/ 
+std::vector<long double> v;                         /*particle velocities*/   
+std::vector<int> configuration;                     /*cluster identification:   1 = independent particle
+                                                                                0 = particle is inside of a cluster
+                                                                                2, 3, .., N = first particle of a cluster with this length
+                                                                                -2, -3, .., -N = last particle of a cluster with this length*/
+bool save_all_jumps = false;                        /*write every jump across potential barrier to file*/
 
-arma::vec numOfMerges;
-arma::vec timeOfMerges;
-double meanClusterSize;
-
-arma::vec density;                                  /*one-partcile density*/
-arma::vec density_II;                               /*two-particle density*/
+std::vector<long double> density;                                  /*one-partcile density*/
+std::vector<long double> density_II;                               /*two-particle density at contact*/
 int spatialSteps;                                   /*spatial resolution when measuring densities*/
-double current;                                     /*particle current*/
-double MSD = 0;                                     /*mean square displacement*/
+long double current;                                /*particle current*/
 
-double pi = boost::math::double_constants::pi;      /*pi*/
-arma::vec deterministicForce;                       /*external force*/
-arma::vec interactionForce;                         /*interaction force*/
-int forceSteps = 1000000;                           /*spatial resolution for pre-calculated forces*/
+long double pi = boost::math::double_constants::pi; /*pi*/
 
-double U0 = 6;                                      /*amplitude of cosine potentail*/
-double D = 1;                                       /*diffusion coefficient*/
-double sigma = 0.5;                                 /*particle size*/
+long double U0 = 6;                                 /*amplitude of cosine potentail*/
+long double D = 1;                                  /*diffusion coefficient*/
+long double sigma = 0.5;                            /*particle size*/
 int L = 100;                                        /*system length*/
-int N = 50;                                         /*particles number*/
+int N = 50;                                         /*number of particles*/
 double Gamma = 1.0;                                 /*amplitude of adhesive interaction*/
 int order = 3;                                      /*order of polynomial representation of delta function*/
 double epsilon = 0.05;                              /*range of adhesive interaction*/
-double dt = 0.0000001;                              /*time step*/
-double f = 0;                                       /*constant drag force*/
+long double dt = 0.001;                                  /*time step*/
+long double f = 0;                                       /*constant drag force*/
 double delta = 0.001;                               /*spatial resolition for measuring denity and two-particle-density at contact*/
 double deltaPrime = delta;                          /*spatial resolition for measuring two-particle-density at contact*/
 double equilibrationTime = 1000.0;                  /*time to run th esimulation before starting measurements*/
-double totalSimulationTime = 4000.0;                /*total simulation time*/
+double totalSimulationTime = 3000.0;                /*total simulation time*/
 double tfTrajectory = 0.001*totalSimulationTime;    /*time between outputting the particle positions*/
 double tfCurrent = 0.001*totalSimulationTime;       /*time between outputting the particle current*/
 double tfMSD = 0.001;                               /*time between outputting the mean square displacement*/
 std::string outputPrefix = "";                      /*prefix of output (folder name)*/
-std::string cfgFile = "basep.cfg";                  /*file name of configuration parameters*/
-
-arma::vec taggedSingleParticlesEpsilon;             /*particles that have a distance larger than epsilon from other partilces at the beginning of the measurement*/
-int numTaggedEpsilon;                               /*number of such partilces*/
-arma::vec taggedSingleParticlesContact;             /*particles that are not in contact with other partilces at the beginning of the measurement*/
-int numTaggedContact;                               /*number of such partilces*/
-
+std::string cfgFile = "basep.cfg";                  /*default file name of configuration parameters*/
 
 /**
- * @brief Maps the particle position back into the central image box according to the boundary conditions. Updates the particle current accordingly. 
+ * @brief Maps the particle position back into the central image box according to the boundary conditions.
  * 
  */
 void applyPeriodicBoundaryConditions(){
     for(int i = 0; i < N; ++i){
-        if(x(i)>= L){
-            x(i) -= L;
-            current++;
-        }else if(x(i) < 0.0){
-            x(i) += L;
-            current--;
+        // Apply periodic boundary conditions
+        if(x[i]>= L){
+            x[i] -= L;
+        }else if(x[i] < 0.0){
+            x[i] += L;
         }
     }
 }
 
 /**
- * @brief Get the Mean Cluster Size object
+ * @brief Calculate the instantaneous mean cluster size
  * 
  * @return double 
  */
@@ -108,8 +107,8 @@ double getMeanClusterSize(){
     double num = 0;
     double size = 0;
     for(int i = 0; i < N; i++){
-        if(configuration(i)>0){
-            size += configuration(i);
+        if(configuration[i]>0){
+            size += configuration[i];
             num += 1;
         }
     }
@@ -121,63 +120,43 @@ double getMeanClusterSize(){
  * 
  */
 void initialConfiguration(){
-    x = arma::zeros<arma::vec>(N);
-    x_initial = arma::zeros<arma::vec>(N);
-    x_noPB = arma::zeros<arma::vec>(N);
-    v = arma::zeros<arma::vec>(N);
+    spatialSteps = int(round(1/delta));             
+    x.reserve(N);
+    x_initial.reserve(N);
+    x_noPB.reserve(N);
+    x_old.reserve(N);
+    v.reserve(N);
+    configuration.reserve(N);
+    density.reserve(spatialSteps);
+    density_II.reserve(spatialSteps);
     current = 0;
 
-    numOfMerges = arma::zeros<arma::vec>(N);
-    timeOfMerges = arma::zeros<arma::vec>(N);
-    meanClusterSize  = 0;
-
     //initalize configuration: all particles are independent
-    configuration = arma::ones<arma::vec>(N);
-    
-    /*windows for each particle position are calculated so that there are no conflicts,
-    particle positions are put in each window according to a uniform distribution*/
-    for (int i = 0; i < N; ++i) {
-        x(i) = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
+    for(int i = 0; i < N; ++i) {
+        configuration[i] = 1;
     }
 
-    x_initial = x;
-    x_noPB = x;
-
-    //initialize one/two-particle densities
-    spatialSteps = int(round(1/delta));
-    density = arma::zeros<arma::vec>(spatialSteps);
-    density_II = arma::zeros<arma::vec>(spatialSteps);
-
-    interactionForce = arma::zeros<arma::vec>(forceSteps);
-    deterministicForce = arma::zeros<arma::vec>(forceSteps);
-
-    //pre-calculate interaction forces
-    for(int i = 0; i < forceSteps; i++){
-        deterministicForce(i) = pi * U0 * sin(2 * pi * double(i)/double(forceSteps)) + f;
+    /*Windows for each particle position are calculated so that there are no conflicts.
+    Particle positions are put in each window according to a uniform distribution.*/
+    for(int i = 0; i < N; ++i) {
+        x[i] = double(L)/double(N) * i + sigma/2 + randUniform() * (double(L)/double(N)-sigma);
     }
 
-    //pre-calculate interaction forces
-    double distance;
-    for(int i = 0; i < forceSteps; i++){
-        distance = double(i)/double(forceSteps) + sigma;
-
-        if(distance >= sigma + epsilon){
-            interactionForce(i) = 0.0;
-        }else{
-            interactionForce(i) = -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
-        }
+    for(int i = 0; i < N; ++i){
+        x_initial[i] = x[i];
+        x_noPB[i] = x[i];
     }
 }
 
 /**
- * @brief Get the minimum image distance
+ * @brief Get the minimum image distance between particles
  * 
  * @param xi position of first particle
  * @param xj position of second particle
- * @return double 
+ * @return long double 
  */
-double getMinimumImageDistance(double xi, double xj){
-        double dx = xi - xj;
+long double getMinimumImageDistance(long double xi, long double xj){
+        long double dx = xi - xj;
         if (dx < 0)
             dx = -dx;
         if (dx < 0.5 * L)
@@ -188,73 +167,46 @@ double getMinimumImageDistance(double xi, double xj){
 
 /**
  * @brief Draw new particle velocities (random + deterministic forces)
- * 
- * @return arma::vec 
+ *  
  */
 void particleVelocities(){
     double interaction = 0;
     double distance;
 
     for(int i = 0; i < N; i++){
-        interaction = 0;
-        //get interaction forces, if particles are within interaction range epsilon
-        distance = getMinimumImageDistance(x(i), x((i-1+N)%N));
-        if(distance < sigma + epsilon){
-            interaction += interactionForce(int(round((distance-sigma)*forceSteps)));
+        if(Gamma != 0){
+            interaction = 0;
+            //get interaction forces, if particles are within interaction range epsilon
+            distance = getMinimumImageDistance(x[i], x[(i-1+N)%N]);
+            if(distance < sigma + epsilon){
+                interaction += -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
+            }
+            distance = getMinimumImageDistance(x[(i+1)%N], x[i]);
+            if(distance < sigma + epsilon){
+                interaction -= -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
+            }
         }
-        distance = getMinimumImageDistance(x((i+1)%N), x(i));
-        if(distance < sigma + epsilon){
-            interaction -= interactionForce(int(round((distance-sigma)*forceSteps)));
-        }
-
         //calculate particle velocity
-        v(i) = deterministicForce((x(i) - floor(x(i))) * forceSteps) + interaction + sqrt(2*D/dt)*randNormal();
+        v[i] = interaction + sqrt(2*D/dt)*randNormal() + pi * U0 * sin(2 * pi * x[i]) + f;
     }
 }
 
 /**
- * @brief Calculate cluster velocities from culster identification and forces exterted on each particle
+ * @brief Calculate cluster velocities from culster identification and particle velocities
  * 
- * @return arma::vec 
  */
 void clusterVelocities(){
     for(int i = 0; i < N; i++){
-        if(configuration(i)>0){
-            //calculate cluster velocity
-            for(int j = 1; j < configuration(i); j++){
-                v(i) += v((i+j)%N);
+        if(configuration[i]>0){
+            for(int j = 1; j < configuration[i]; j++){
+                v[i] += v[(i+j)%N];
             }
-            v(i) /= configuration(i);
+            v[i] /= double(configuration[i]);
 
-            //set cluster velocity as velocity for all particles in the cluster
-            for(int j = 1; j < configuration(i); j++){
-                v((i+j)%N) = v(i);
+            for(int j = 1; j < configuration[i]; j++){
+                v[(i+j)%N] = v[i];
             }
         }
-    }
-}
-
-/**
- * @brief Merge collided clusters into one cluster
- * 
- */
-void mergeClusters(int collidingParticle){
-    //find first particle of the left cluster
-    int i = 0;
-    while(configuration((collidingParticle-i+N)%N) < 1){
-        i++;
-    }
-    
-    v((collidingParticle-i+N)%N) = v((collidingParticle-i+N)%N)*configuration((collidingParticle-i+N)%N) + v((collidingParticle+1)%N)*configuration((collidingParticle+1)%N);
-
-    //update cluster identification
-    configuration((collidingParticle-i+N)%N) += configuration((collidingParticle+1)%N);
-    configuration((collidingParticle+1)%N) = 0;
-
-    //update velocities of all particles involved in the collision
-    v((collidingParticle-i+N)%N) /= configuration((collidingParticle-i+N)%N);
-    for(int j = 1; j < configuration((collidingParticle-i+N)%N); j++){
-        v((collidingParticle-i+N+j)%N) = v((collidingParticle-i+N)%N);
     }
 }
 
@@ -263,21 +215,22 @@ void mergeClusters(int collidingParticle){
  * 
  */
 void splitClusters(){ 
-    double forceLeft;
-    double forceRight;
+    long double forceLeft;                               /*total force on the left subcluster*/
+    long double forceRight;                              /*total force on the right subcluster*/
 
-    int relativePosOfBiggestDifference;
-    double lowestInteractionForce;
+    int relativePosOfBiggestDifference;             /*position of potential split*/
+    long double lowestInteractionForce;                  /*lowest difference of the interaction forces of the two subclusters found so far*/
 
-    int firstIndependentCluster = -1;
-    int totalChecks = N;
-    int i;
+    int firstIndependentCluster = -1;               /*index of the first cluster*/
+    int totalChecks = N;                            /*total number of particles to check*/
+    int i;                                          /*index of the current particle*/
 
     //check all clusters
     for(int n = 0; n < totalChecks; n++){
         i = n%N;
-        if(configuration(i)>1){
-            //get the first independent particle (i.e. single particle or first particle of a cluster)
+        //find next cluster
+        if(configuration[i]>1){
+            //find the first particle of the first cluster
             if(firstIndependentCluster < 0){
                 firstIndependentCluster = i;
                 totalChecks = i + N;
@@ -290,76 +243,125 @@ void splitClusters(){
             lowestInteractionForce = 0;
 
             //calculate total force exerted on the cluster
-            for(int j = 0; j < configuration(i); j++){
-                forceRight += v((i+j)%N);
+            for(int j = 0; j < configuration[i]; j++){
+                forceRight += v[(i+j)%N];
             }
 
             //calculate forces on two subclusters for all possible splitting positions
-            for(int j = 0; j < configuration(i)-1; j++){
-                forceRight -= v((i+j)%N);
-                forceLeft += v((i+j)%N);
+            for(int j = 0; j < configuration[i]-1; j++){ /*added -1 to fix this (#connections = #particles - 1)*/
+                //update forces of both subclusters
+                forceRight -= v[(i+j)%N];
+                forceLeft += v[(i+j)%N];
 
                 //find the pair of subclusters for which the velocity difference is the largest
-                if(forceLeft/(j+1) - forceRight/(configuration(i)-j-1) < lowestInteractionForce){
-                    lowestInteractionForce = forceLeft/(j+1) - forceRight/(configuration(i)-j-1);
+                if(forceLeft/(j+1) - forceRight/double(configuration[i]-j-1) < lowestInteractionForce){
+                    lowestInteractionForce = forceLeft/(j+1) - forceRight/double(configuration[i]-j-1);
                     relativePosOfBiggestDifference = j;
                 }      
             }
 
-	    //if the difference is positive, we split the cluster
+            //if the difference is positive, we split the cluster by updateing the configuration
             if(relativePosOfBiggestDifference > -1){
-                configuration((i+relativePosOfBiggestDifference+1)%N) = configuration(i) - relativePosOfBiggestDifference - 1;
-                configuration(i) = relativePosOfBiggestDifference + 1;  
+                configuration[(i+relativePosOfBiggestDifference+1)%N] = configuration[i] - relativePosOfBiggestDifference - 1;
+                configuration[i] = relativePosOfBiggestDifference + 1; 
+
+                //check the new cluster again
                 n--;
+
+                if(configuration[i] > 1){
+                    configuration[(i+int(configuration[i])-1)%N] = - configuration[i];
+                }
+
+                if(configuration[(i+relativePosOfBiggestDifference+1)%N] > 1){
+                    configuration[(i+relativePosOfBiggestDifference+1+int(configuration[(i+relativePosOfBiggestDifference+1)%N])-1)%N] = - configuration[(i+relativePosOfBiggestDifference+1)%N];
+                }
             } 
         }
     }
 }
 
+
 /**
- * @brief Checks if the hardcore constrains are not violated, throw error if conditions are violated
+ * @brief Checks that the hardcore constrains are not violated, throw error if conditions are violated
  * 
  */
-void checkConfiguration(int collidingParticle){
+void checkConfiguration(){
     for (int i = 0; i < N-1; ++i) 
-        if (fabs(getMinimumImageDistance(x(i+1), x(i))) - sigma < -pow(10, -12)/dt){
+        if (fabs(getMinimumImageDistance(x[i+1], x[i])) - sigma < -pow(10, -12)/dt) {
             printf("Distance violated: %d, %d \n", i, i+1);
-            std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
-            std::cout<<x(i+1)<<", "<< x(i)<<std::endl;
-            std::cout<<fabs(getMinimumImageDistance(x(i), x(i+1)))- sigma<<std::endl;
-            std::cout<<x<<std::endl;
-            std::cout<<v<<std::endl;
-            std::cout<<configuration<<std::endl;
+            std::cout<<x[i+1]<<", "<< x[i]<<std::endl;
+            std::cout<<fabs(getMinimumImageDistance(x[i], x[i+1]))- sigma<<std::endl;
             exit(EXIT_FAILURE);
         }
-		if (fabs(getMinimumImageDistance(x(N-1), x(0))) - sigma < -pow(10, -12)/dt){
+		if (fabs(getMinimumImageDistance(x[N-1], x[0])) - sigma < -pow(10, -12)/dt) {
             printf("Distance violated: %d, %d \n", N-1, 0);
-            std::cout<<"collidingParticle = "<<collidingParticle<<std::endl;
             std::cout.precision(17);
-            std::cout<<x(N-1)<<", "<< x(0)<<std::endl;
-            std::cout<<fabs(getMinimumImageDistance(x(N-1), x(0)))- sigma<<std::endl;
-            std::cout<<x<<std::endl;
-            std::cout<<v<<std::endl;
-            std::cout<<configuration<<std::endl;
+            std::cout<<x[N-1]<<", "<< x[0]<<std::endl;
+            std::cout<<fabs(getMinimumImageDistance(x[N-1], x[0]))- sigma<<std::endl;
             exit(EXIT_FAILURE);
-    }
-    if(arma::accu(configuration) != N){
-        std::cout<<"Error in configuration"<<std::endl;
-        exit(EXIT_FAILURE);
     }
 }
 
 /**
- * @brief Execute a single time step of length dt
+ * @brief Total sum of all positions of the particles in the cluster
+ * 
+ * @param id of the first particle of the cluster
+ * @return double 
+ */
+long double getClusterCM(int id){
+    id += 2*N;
+    id = id%N;
+    return x[id] * double(configuration[id]) + sigma * (double(configuration[id]-1) * double(configuration[id])) / 2;
+}
+
+/**
+ * @brief Total sum of all velocities of the particles in the cluster
+ * 
+ * @param id of the first particle of the cluster
+ * @return double 
+ */
+long double getClusterV(int id){
+    id += 2*N;
+    id = id%N;
+    return v[id] * double(configuration[id]);
+}
+
+/**
+ * @brief Number of particles in the cluster
+ * 
+ * @param id of the first particle of the cluster
+ * @return double 
+ */
+double getClusterSize(int id){
+    id += 2*N;
+    id = id%N;
+    return configuration[id];
+}
+
+/**
+ * @brief Get the id of the next cluster to the left
+ * 
+ * @param id of the first particle of the cluster
+ * @return int 
+ */
+int getLeftId(int id){
+    if(configuration[(id-1+N)%N]<0){
+        return int(configuration[(id-1+N)%N]) + id;
+    }else{
+        return id - 1;
+    }
+}
+
+/**
+ * @brief Execute a single time step of duration dt
  * 
  */
-void doSingleTimeStep(){
-    meanClusterSize += getMeanClusterSize() * dt;
-    double firstCollision;
-    double remainingTime = dt;
-    double dx, dv;
-    int collidingParticle;
+void doSingleTimeStep(){ 
+    //remember old particle positions
+    for (int i = 0; i < N; i++){
+        x_old[i] = x[i];
+    }
 
     //calculate new particle velocities
     particleVelocities();
@@ -370,51 +372,132 @@ void doSingleTimeStep(){
     //calculate cluster velocities based on forces exerted on particles and cluster identification
     clusterVelocities();
 
-    int countMerges = 0;
-    auto start = std::chrono::system_clock::now();
-    while(remainingTime > 0){
-        //calculate time of first collision
-        firstCollision = remainingTime;
-        collidingParticle = -1;
-        for(int i = 0; i < N; i++){
-            //calculate distance between particles
-            dx = x(i) - x((i-1+N)%N) - sigma;
-            //apply periodic boundaries
-            if(x((i-1+N)%N) > x(i)){
-                dx += L;
-            }
-            dv = v((i-1+N)%N) - v(i);
-            //check whether particles are moving towards each other
-            if(dv > 0){
-                //calculate lowest collision time
-                if(firstCollision > dx/dv){
-                    firstCollision = dx/dv;
-                    collidingParticle = (i-1+N)%N;
-                }
-            }
-        }
+    //keep 3 neighboring clusters in memory at all times
+    int thisId, thisSize;
+    long double thisCM, thisV;
 
-        //move partciles according to velocities
-        x += firstCollision * v;
-        x_noPB += firstCollision * v;
-        applyPeriodicBoundaryConditions();
+    int leftId, leftSize;
+    long double leftCM, leftV;
 
-        //record time passed
-        remainingTime -= firstCollision;
+    int rightId, rightSize;
+    long double rightCM, rightV;
 
-        //check for particle overlaps
-        checkConfiguration(collidingParticle);
+    long double dx, dv;
+    int collisionHappened = 0;
+    int firstId;
 
-        //merge collided clusters
-        if(collidingParticle > -1){
-            mergeClusters(collidingParticle);
-            countMerges += 1;
-        }
+    //find first cluster
+    thisId = 0;                                        
+    while(configuration[thisId]<1){
+        thisId++;
     }
-    auto end = std::chrono::system_clock::now();
-    std::chrono::duration<double> elapsed_seconds = end-start;
-    timeOfMerges(countMerges) += elapsed_seconds.count();
-    numOfMerges(countMerges) += 1;
+    firstId = thisId;
+
+    //load data for all 3 clusters
+    thisCM = getClusterCM(thisId);
+    thisV = getClusterV(thisId);
+    thisSize = getClusterSize(thisId);
+
+    leftId = getLeftId(thisId);
+    rightId = int(configuration[thisId%N]) + thisId;
+
+    leftCM = getClusterCM(leftId);
+    leftV = getClusterV(leftId);
+    leftSize = getClusterSize(leftId);
+
+    rightCM = getClusterCM(rightId);
+    rightV = getClusterV(rightId);
+    rightSize = getClusterSize(rightId);
+    do{
+        //calculate time until next collision
+        dv = thisV/thisSize - rightV/rightSize;
+        dx = rightCM/rightSize - sigma * double(rightSize+thisSize)/2 - thisCM/thisSize;
+        if(rightCM/rightSize < sigma * double(rightSize+thisSize-2)/2 + thisCM/thisSize){
+            dx += L;
+        }
+        
+        //if collision happens within time dt, merge clusters
+        if(dv > 0 && dt >= dx/dv){
+            if(thisCM/thisSize > rightCM/rightSize){
+                rightCM += rightSize * L;
+            }
+            rightCM +=thisCM;
+            rightV += thisV;
+            rightSize += thisSize;
+            rightId = thisId;
+
+            thisId = leftId;
+            thisV = leftV;
+            thisCM = leftCM;
+            thisSize = leftSize;
+
+            //load data for the new cluster neighboring to the left
+            leftId = getLeftId(thisId);
+            leftCM = getClusterCM(leftId);
+            leftV = getClusterV(leftId);
+            leftSize = getClusterSize(leftId);
+
+            //remember that  collision happened
+            collisionHappened = 1;
+        }else{
+            //if a merge happened but no further merges are detected for the same cluster at this time, update the configuration
+            if(collisionHappened > 0){
+                for(int i = 0; i<rightSize; i++){
+                    configuration[(i+rightId+N)%N] = 0;
+                    v[(i+rightId+N)%N] = rightV/rightSize;
+                    x[(i+rightId+N)%N] = rightCM/rightSize + sigma * double(2*i-rightSize+1)/2;
+                }
+                configuration[(rightId+N)%N] = rightSize;
+                configuration[(rightId+rightSize-1+N)%N] = -rightSize;
+                collisionHappened = 0;
+            }
+            
+            //move on to the next cluster
+            leftId = thisId;
+            leftCM = thisCM;
+            leftSize = thisSize;
+            leftV = thisV;
+
+            thisId = rightId;
+            thisV = rightV;
+            thisCM = rightCM;
+            thisSize = rightSize;
+            
+            //load data for the new cluster neighboring to the right
+            rightId = int(configuration[(thisId+N)%N]) + thisId;
+            
+            rightCM = getClusterCM(rightId);
+            
+            rightV = getClusterV(rightId);
+         
+            rightSize = getClusterSize(rightId);
+        }
+        //do 1 full cycle through the system
+    }while(firstId + N >= thisId && thisId >= firstId - N);
+
+    //move partciles according to velocities
+    for(int i = 0; i<N; i++){
+        x[i] += dt * v[i];
+    }
+
+    for(int i = 0; i<N; i++){
+        if(x[i]-x_old[i]>L/2){
+            x_old[i]+=L;
+        }
+        if(x[i]-x_old[i]<-L/2){
+            x_old[i]-=L;
+        }
+        //track particle positions without periodic boundaries for MSD calculation
+        x_noPB[i] += x[i]-x_old[i]; 
+    }
+
+    applyPeriodicBoundaryConditions();
+    checkConfiguration();
+
+    //measure current
+    for(int i = 0; i < N; i++){
+        current += v[i]*dt/L;
+    }
 }
 
 /**
@@ -422,54 +505,19 @@ void doSingleTimeStep(){
  * 
  */
 void getEquilibriumState(){
-    double timePassed = 0;
+    double timePassed = 0;                              /*time passed since start of simulation*/
+    //run simulation for the equilibration time
     while(timePassed < equilibrationTime){
         doSingleTimeStep();
         timePassed += dt;
     }
 
-    //resetting current
+    //reset output variables
     current = 0;
 
-    //resetting MSD
-    MSD = 0;
-    x_initial = x;
-    x_noPB = x;
-
-    numOfMerges = arma::zeros<arma::vec>(N);
-    timeOfMerges = arma::zeros<arma::vec>(N);
-    meanClusterSize  = 0;
-}
-
-/**
- * @brief tag single particles for MSD measurement initially seperate particles
- * 
- */
-void tagParticles(){
-    numTaggedEpsilon = 0;
-    numTaggedContact = 0;
-    arma::vec taggedEpsilonTemp = arma::zeros<arma::vec>(N);
-    arma::vec taggedContactTemp = arma::zeros<arma::vec>(N);
-
-    for(int i = 0; i<N; i++){
-        if(getMinimumImageDistance(x((i+1)%N), x(i)) - sigma > epsilon && getMinimumImageDistance(x(i), x((i-1+N)%N)) - sigma > epsilon){
-            taggedEpsilonTemp(numTaggedEpsilon) = i;
-            numTaggedEpsilon++;
-        }
-        if(configuration(i) == 1){
-            taggedContactTemp(numTaggedContact) = i;
-            numTaggedContact++;
-        }
-    }
-
-    taggedSingleParticlesEpsilon = arma::zeros<arma::vec>(numTaggedEpsilon);
-    taggedSingleParticlesContact = arma::zeros<arma::vec>(numTaggedContact);
-
-    for(int i = 0; i<numTaggedEpsilon; i++){
-       taggedSingleParticlesEpsilon(i) = taggedEpsilonTemp(i);
-    }
-    for(int i = 0; i<numTaggedContact; i++){
-       taggedSingleParticlesContact(i) = taggedContactTemp(i);
+    for(int i = 0; i < N; ++i){
+        x_initial[i] = x[i];
+        x_noPB[i] = x[i];
     }
 }
 
@@ -478,14 +526,14 @@ void tagParticles(){
  * 
  */
 void simulateSystem(){
-    double timePassed = 0;
-    double tTrajectory = 0;
-    double tCurrent = 0;
-    double tMSD = 0;
-    int k;
-
-    //tag particles for MSD measurement
-    tagParticles();
+    double timePassed = 0;                              /*time passed since start of simulation*/
+    double tTrajectory = 0;                             /*time passed since last output of trajectory*/
+    double tCurrent = 0;                                /*time passed since last output of current*/
+    double tMSD = 0;                                    /*time passed since last output of MSD*/
+    double MSD;                                         /*mean square displacement*/
+    int value;                                          /*temporary variable for writing to file*/
+    bool forward = true;                                /*direction of jump*/
+    bool backward = false;                              /*direction of jump*/
 
     //prepare output files
     boost::filesystem::create_directory("output/");
@@ -493,37 +541,56 @@ void simulateSystem(){
     FILE *trajectoryFile;
     FILE *currentFile;
     FILE *MSDFile;
-    FILE *MSDFileSingleEpsilon;
-    FILE *MSDFileSingleContact;
     std::string filename = outputPrefix+"/trajectory";
     trajectoryFile = fopen(filename.c_str(), "w");
     filename = outputPrefix+"/current";
     currentFile = fopen(filename.c_str(), "w");
     filename = outputPrefix+"/MSD";
     MSDFile = fopen(filename.c_str(), "w");
-    filename = outputPrefix+"/MSDsingleEpsilon";
-    MSDFileSingleEpsilon = fopen(filename.c_str(), "w");
-    filename = outputPrefix+"/MSDsingleContact";
-    MSDFileSingleContact = fopen(filename.c_str(), "w");
+    filename = outputPrefix+"/jump_particle.bin";
+    std::ofstream file_jump_particle(filename, std::ios::binary);
+    filename = outputPrefix+"/jump_time.bin";
+    std::ofstream file_jump_time(filename, std::ios::binary);
+    filename = outputPrefix+"/jump_direction.bin";
+    std::ofstream file_jump_direction(filename, std::ios::binary);
 
     //run simulation for the total simulation time
     while(timePassed < totalSimulationTime){
         doSingleTimeStep();
+        //write jumps across potential barrier to file
+        if(save_all_jumps){
+            for(int i = 0; i < N; i++){
+                if(int(x[i])-int(x_old[i]) == 1){
+                    value = int(x_old[i]);
+                    file_jump_particle.write(reinterpret_cast<char*>(&value), sizeof(value));
+                    file_jump_time.write(reinterpret_cast<char*>(&timePassed), sizeof(timePassed));
+                    file_jump_direction.write(reinterpret_cast<char*>(&forward), sizeof(forward));
+                }
+                if(int(x[i])-int(x_old[i]) == -1){
+                    value = int(x[i]);
+                    file_jump_particle.write(reinterpret_cast<char*>(&value), sizeof(value));
+                    file_jump_time.write(reinterpret_cast<char*>(&timePassed), sizeof(timePassed));
+                    file_jump_direction.write(reinterpret_cast<char*>(&backward), sizeof(backward));
+                }
+            }
+            
+        }
+        //update time
         timePassed += dt;
 
         //collect statistics for one-particle density
         for(int i = 0; i < N; i++){
-            density((x(i) - floor(x(i))) * spatialSteps)++;
+            density[(x[i] - floor(x[i])) * spatialSteps]++;
         }
 
         //collect statistics for two-particle density at contact
         for(int i = 0; i < N; i++){
-            if(configuration(i) > 0){
-                if(fabs(getMinimumImageDistance(x((i-1+N)%N), x(i))) - sigma < delta){
-                        density_II((x((i-1+N)%N) - floor(x((i-1+N)%N))) * spatialSteps)++;
+            if(configuration[i] > 0){
+                if(fabs(getMinimumImageDistance(x[(i-1+N)%N], x[i])) - sigma < delta){
+                        density_II[(x[(i-1+N)%N] - floor(x[(i-1+N)%N])) * spatialSteps]++;
                     }
-                if(configuration(i) > 1){
-                    i += configuration(i) - 1;
+                if(configuration[i] > 1){
+                    i += configuration[i] - 1;
                 }
             }
         }
@@ -534,9 +601,9 @@ void simulateSystem(){
             tTrajectory = 0.0;
             fprintf(trajectoryFile, "%f, ", timePassed);
             for(int i = 0; i < N-1; ++i){
-                fprintf(trajectoryFile, "%f, ", x(i));
+                fprintf(trajectoryFile, "%.15Lf, ", x[i]);
             }
-            fprintf(trajectoryFile, "%f\n", x(N-1));
+            fprintf(trajectoryFile, "%.15Lf\n", x[N-1]);
         }
 
         //output current at each time interval tfCurrent
@@ -544,40 +611,22 @@ void simulateSystem(){
         if (tCurrent >= tfCurrent) {
             tCurrent  = 0.0;
             fprintf(currentFile, "%f, ", timePassed);
-            fprintf(currentFile, "%f\n", current/timePassed);
+            fprintf(currentFile, "%.15Lf\n", current/timePassed);
         }
 
-        //output MSD at each time interval tfMSD
+        //calculate mean square displacement
+        MSD = 0;
+        for(int i = 0; i < N; i++){
+            MSD += (x_noPB[i] - x_initial[i]) * (x_noPB[i] - x_initial[i]);
+        }
+
+        //output MSD
         tMSD += dt;
         if (tMSD >= tfMSD) {
             tMSD  = 0.0;
             tfMSD *= 1.1;
-            
-            //MSD for all partilces
-            MSD = 0;
-            for(int i = 0; i < N; i++){
-                MSD += (x_noPB(i) - x_initial(i)) * (x_noPB(i) - x_initial(i));
-            }
             fprintf(MSDFile, "%f, ", timePassed);
             fprintf(MSDFile, "%f\n", MSD/N);
-
-            //MSD for single partilces (distance larger than epsilon)
-            MSD = 0;
-            for(int i = 0; i < numTaggedEpsilon; i++){
-                k = int(round(taggedSingleParticlesEpsilon(i)));
-                MSD += (x_noPB(k) - x_initial(k)) * (x_noPB(k) - x_initial(k));
-            }
-            fprintf(MSDFileSingleEpsilon, "%f, ", timePassed);
-            fprintf(MSDFileSingleEpsilon, "%f\n", MSD/numTaggedEpsilon);
-
-            //MSD for single partilces (not in contact)
-            MSD = 0;
-            for(int i = 0; i < numTaggedContact; i++){
-                k = int(round(taggedSingleParticlesContact(i)));
-                MSD += (x_noPB(k) - x_initial(k)) * (x_noPB(k) - x_initial(k));
-            }
-            fprintf(MSDFileSingleContact, "%f, ", timePassed);
-            fprintf(MSDFileSingleContact, "%f\n", MSD/numTaggedContact);
         }
     }
 
@@ -585,13 +634,15 @@ void simulateSystem(){
     fclose(trajectoryFile);
     fclose(currentFile);
     fclose(MSDFile);
-    fclose(MSDFileSingleEpsilon);
-    fclose(MSDFileSingleContact);
+    file_jump_particle.close();
+    file_jump_time.close();
+    file_jump_direction.close();
 
     //normalize densities
-    density /= totalSimulationTime/dt*L*delta;
-    density_II /= totalSimulationTime/dt*L*delta*deltaPrime;
-    timeOfMerges /= numOfMerges;
+    for(int i = 0; i < spatialSteps; i++){
+        density[i] /= totalSimulationTime/dt*L*delta;
+        density_II[i] /= totalSimulationTime/dt*L*delta*deltaPrime;
+    }
 }
 
 /**
@@ -599,28 +650,14 @@ void simulateSystem(){
  * 
  */
 void saveResults(){
-    arma::mat output = arma::zeros<arma::mat>(spatialSteps, 2);
+    FILE *densityFile;
+    std::string filename = outputPrefix+"/density";
+    densityFile = fopen(filename.c_str(), "w");
     for(int i = 0; i < spatialSteps; i++){
-        output(i, 0) = i * delta;
-        output(i, 1) = density(i);
+        fprintf(densityFile, "%f, ", i * delta);
+        fprintf(densityFile, "%Lf\n", density[i]);
     }
-    output.save(outputPrefix+"/density", arma::raw_ascii);
-
-    for(int i = 0; i < spatialSteps; i++){
-        output(i, 1) = density_II(i);
-    }
-    output.save(outputPrefix+"/density_II", arma::raw_ascii);
-
-    output = arma::zeros<arma::mat>(N, 2);
-    for(int i = 0; i < N; i++){
-        output(i, 0) = i;
-        output(i, 1) = timeOfMerges(i);
-    }
-    output.save(outputPrefix+"/timeOfMerges", arma::raw_ascii);
-
-    arma::vec meanCS = arma::zeros<arma::vec>(1);
-    meanCS(0) = meanClusterSize/totalSimulationTime;
-    meanCS.save(outputPrefix+"/meanClusterSize", arma::raw_ascii);
+    fclose(densityFile);
 }
 
 /**
@@ -639,11 +676,11 @@ void loadInput(){
     ("totaltime,t", po::value<double>(&totalSimulationTime), "Total time of simulation.")
     ("particles,N", po::value<int>(&N), "Number of particles.")
     ("length,L", po::value<int>(&L), "Length of the simulated system.")
-    ("diameter,sigma", po::value<double>(&sigma), "Diameter of hard rods.")
-    ("DiffusionConstant,D", po::value<double>(&D), "Diffusion constant.")
-    ("timestep,dt", po::value<double>(&dt), "Timestep for Langevin-Euler-Scheme.")
-    ("force,f", po::value<double>(&f), "Amplitude of constants drag force.")
-    ("AmpU,U", po::value<double>(&U0), "Amplitude of external periodic potential.")
+    ("diameter,sigma", po::value<long double>(&sigma), "Diameter of hard rods.")
+    ("DiffusionConstant,D", po::value<long double>(&D), "Diffusion constant.")
+    ("timestep,dt", po::value<long double>(&dt), "Timestep for Langevin-Euler-Scheme.")
+    ("force,f", po::value<long double>(&f), "Amplitude of constants drag force.")
+    ("AmpU,U", po::value<long double>(&U0), "Amplitude of external periodic potential.")
     ("gamma,stickyness", po::value<double>(&Gamma), "Adhesive interaction strength.")
     ("order", po::value<int>(&order), "Polynomial order of the representation of the delta function.")
     ("epsilon", po::value<double>(&epsilon), "Range of the representation of the delta function.")
@@ -684,35 +721,42 @@ void loadInput(){
 
 /**
  * @brief Simulate Baxter's adhesive hard spheres and 
- * pure hard spheres (gamma = 0)
+ * pure hard spheres (gamma = 0) in an external cosine potential
  * 
  * @param argc 
  * @param input path to configuration file
  * @return int 
  */
 int main(int argc, char** input){
+    //check if a configuration file is provided
     if(argc > 1){
         cfgFile = input[1];
     }
 
+    //load configuration file
     loadInput();
 
     //initialize the simulation
     initialConfiguration();
+
     //run simulation until equilibrium is reached
     getEquilibriumState();
 
     //save start time
     auto start = std::chrono::system_clock::now();
 
+    //run the simulation
     simulateSystem();
 
     //save end time
     auto end = std::chrono::system_clock::now();
-    //calculate the duration of the simulation
-    std::chrono::duration<double> elapsed_seconds = end-start;
-    //print duration
-    std::cout<< "duration of the simulation: " <<elapsed_seconds.count()<<" s"<<std::endl;
 
+    //calculate the computation time
+    std::chrono::duration<double> elapsed_seconds = end-start;
+
+    //print computation time
+    std::cout<<"Computation time: "<<elapsed_seconds.count()<<" s"<<std::endl;
+
+    //save results
     saveResults();
 }
