@@ -24,7 +24,6 @@ SOFTWARE.
 
 
 #include <iostream>
-#include <armadillo>
 #include <boost/program_options.hpp>
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/normal_distribution.hpp>
@@ -51,21 +50,18 @@ std::vector<long double> x_initial;                 /*initial particle positions
 std::vector<long double> x_noPB;                    /*particle positions without periodic boundaries*/ 
 std::vector<long double> x_old;                     /*old particle positions*/ 
 std::vector<long double> v;                         /*particle velocities*/   
-arma::vec configuration;                            /*cluster identification:   1 = independent particle
+std::vector<int> configuration;                     /*cluster identification:   1 = independent particle
                                                                                 0 = particle is inside of a cluster
                                                                                 2, 3, .., N = first particle of a cluster with this length
                                                                                 -2, -3, .., -N = last particle of a cluster with this length*/
 bool save_all_jumps = false;                        /*write every jump across potential barrier to file*/
 
-arma::vec density;                                  /*one-partcile density*/
-arma::vec density_II;                               /*two-particle density at contact*/
+std::vector<long double> density;                                  /*one-partcile density*/
+std::vector<long double> density_II;                               /*two-particle density at contact*/
 int spatialSteps;                                   /*spatial resolution when measuring densities*/
 long double current;                                /*particle current*/
 
 long double pi = boost::math::double_constants::pi; /*pi*/
-arma::vec deterministicForce;                       /*external force*/
-arma::vec interactionForce;                         /*interaction force*/
-int forceSteps = 1000000;                           /*spatial resolution for pre-calculated forces*/
 
 long double U0 = 6;                                 /*amplitude of cosine potentail*/
 long double D = 1;                                  /*diffusion coefficient*/
@@ -111,8 +107,8 @@ double getMeanClusterSize(){
     double num = 0;
     double size = 0;
     for(int i = 0; i < N; i++){
-        if(configuration(i)>0){
-            size += configuration(i);
+        if(configuration[i]>0){
+            size += configuration[i];
             num += 1;
         }
     }
@@ -130,10 +126,15 @@ void initialConfiguration(){
     x_noPB.reserve(N);
     x_old.reserve(N);
     v.reserve(N);
+    configuration.reserve(N);
+    density.reserve(spatialSteps);
+    density_II.reserve(spatialSteps);
     current = 0;
 
     //initalize configuration: all particles are independent
-    configuration = arma::ones<arma::vec>(N);
+    for(int i = 0; i < N; ++i) {
+        configuration[i] = 1;
+    }
 
     /*Windows for each particle position are calculated so that there are no conflicts.
     Particle positions are put in each window according to a uniform distribution.*/
@@ -144,30 +145,6 @@ void initialConfiguration(){
     for(int i = 0; i < N; ++i){
         x_initial[i] = x[i];
         x_noPB[i] = x[i];
-    }
-
-    //initialize one/two-particle densities
-    density = arma::zeros<arma::vec>(spatialSteps);
-    density_II = arma::zeros<arma::vec>(spatialSteps);
-
-    interactionForce = arma::zeros<arma::vec>(forceSteps);
-    deterministicForce = arma::zeros<arma::vec>(forceSteps);
-
-    //pre-calculate interaction forces
-    for(int i = 0; i < forceSteps; i++){
-        deterministicForce(i) = pi * U0 * sin(2 * pi * double(i)/double(forceSteps)) + f;
-    }
-
-    //pre-calculate interaction forces
-    double distance;
-    for(int i = 0; i < forceSteps; i++){
-        distance = double(i)/double(forceSteps) + sigma;
-
-        if(distance >= sigma + epsilon){
-            interactionForce(i) = 0.0;
-        }else{
-            interactionForce(i) = -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
-        }
     }
 }
 
@@ -197,18 +174,20 @@ void particleVelocities(){
     double distance;
 
     for(int i = 0; i < N; i++){
-        interaction = 0;
-        //get interaction forces, if particles are within interaction range epsilon
-        distance = getMinimumImageDistance(x[i], x[(i-1+N)%N]);
-        if(distance < sigma + epsilon){
-            interaction += interactionForce(int(round((distance-sigma)*forceSteps)));
-        }
-        distance = getMinimumImageDistance(x[(i+1)%N], x[i]);
-        if(distance < sigma + epsilon){
-            interaction -= interactionForce(int(round((distance-sigma)*forceSteps)));
+        if(Gamma != 0){
+            interaction = 0;
+            //get interaction forces, if particles are within interaction range epsilon
+            distance = getMinimumImageDistance(x[i], x[(i-1+N)%N]);
+            if(distance < sigma + epsilon){
+                interaction += -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
+            }
+            distance = getMinimumImageDistance(x[(i+1)%N], x[i]);
+            if(distance < sigma + epsilon){
+                interaction -= -double(order)*Gamma*((pow(epsilon+sigma-distance, order-1))/((pow(epsilon, order+1)/(order+1))+Gamma*pow(epsilon+sigma-distance, order)));
+            }
         }
         //calculate particle velocity
-        v[i] = deterministicForce((x[i] - floor(x[i])) * forceSteps) + interaction + sqrt(2*D/dt)*randNormal();
+        v[i] = interaction + sqrt(2*D/dt)*randNormal() + pi * U0 * sin(2 * pi * x[i]) + f;
     }
 }
 
@@ -218,13 +197,13 @@ void particleVelocities(){
  */
 void clusterVelocities(){
     for(int i = 0; i < N; i++){
-        if(configuration(i)>0){
-            for(int j = 1; j < configuration(i); j++){
+        if(configuration[i]>0){
+            for(int j = 1; j < configuration[i]; j++){
                 v[i] += v[(i+j)%N];
             }
-            v[i] /= configuration(i);
+            v[i] /= double(configuration[i]);
 
-            for(int j = 1; j < configuration(i); j++){
+            for(int j = 1; j < configuration[i]; j++){
                 v[(i+j)%N] = v[i];
             }
         }
@@ -250,7 +229,7 @@ void splitClusters(){
     for(int n = 0; n < totalChecks; n++){
         i = n%N;
         //find next cluster
-        if(configuration(i)>1){
+        if(configuration[i]>1){
             //find the first particle of the first cluster
             if(firstIndependentCluster < 0){
                 firstIndependentCluster = i;
@@ -264,37 +243,37 @@ void splitClusters(){
             lowestInteractionForce = 0;
 
             //calculate total force exerted on the cluster
-            for(int j = 0; j < configuration(i); j++){
+            for(int j = 0; j < configuration[i]; j++){
                 forceRight += v[(i+j)%N];
             }
 
             //calculate forces on two subclusters for all possible splitting positions
-            for(int j = 0; j < configuration(i)-1; j++){ /*added -1 to fix this (#connections = #particles - 1)*/
+            for(int j = 0; j < configuration[i]-1; j++){ /*added -1 to fix this (#connections = #particles - 1)*/
                 //update forces of both subclusters
                 forceRight -= v[(i+j)%N];
                 forceLeft += v[(i+j)%N];
 
                 //find the pair of subclusters for which the velocity difference is the largest
-                if(forceLeft/(j+1) - forceRight/(configuration(i)-j-1) < lowestInteractionForce){
-                    lowestInteractionForce = forceLeft/(j+1) - forceRight/(configuration(i)-j-1);
+                if(forceLeft/(j+1) - forceRight/double(configuration[i]-j-1) < lowestInteractionForce){
+                    lowestInteractionForce = forceLeft/(j+1) - forceRight/double(configuration[i]-j-1);
                     relativePosOfBiggestDifference = j;
                 }      
             }
 
             //if the difference is positive, we split the cluster by updateing the configuration
             if(relativePosOfBiggestDifference > -1){
-                configuration((i+relativePosOfBiggestDifference+1)%N) = configuration(i) - relativePosOfBiggestDifference - 1;
-                configuration(i) = relativePosOfBiggestDifference + 1; 
+                configuration[(i+relativePosOfBiggestDifference+1)%N] = configuration[i] - relativePosOfBiggestDifference - 1;
+                configuration[i] = relativePosOfBiggestDifference + 1; 
 
                 //check the new cluster again
                 n--;
 
-                if(configuration(i) > 1){
-                    configuration((i+int(configuration(i))-1)%N) = - configuration(i);
+                if(configuration[i] > 1){
+                    configuration[(i+int(configuration[i])-1)%N] = - configuration[i];
                 }
 
-                if(configuration((i+relativePosOfBiggestDifference+1)%N) > 1){
-                    configuration((i+relativePosOfBiggestDifference+1+int(configuration((i+relativePosOfBiggestDifference+1)%N))-1)%N) = - configuration((i+relativePosOfBiggestDifference+1)%N);
+                if(configuration[(i+relativePosOfBiggestDifference+1)%N] > 1){
+                    configuration[(i+relativePosOfBiggestDifference+1+int(configuration[(i+relativePosOfBiggestDifference+1)%N])-1)%N] = - configuration[(i+relativePosOfBiggestDifference+1)%N];
                 }
             } 
         }
@@ -333,7 +312,7 @@ void checkConfiguration(){
 long double getClusterCM(int id){
     id += 2*N;
     id = id%N;
-    return x[id] * configuration(id) + sigma * ((configuration(id)-1) * configuration(id)) / 2;
+    return x[id] * double(configuration[id]) + sigma * (double(configuration[id]-1) * double(configuration[id])) / 2;
 }
 
 /**
@@ -345,7 +324,7 @@ long double getClusterCM(int id){
 long double getClusterV(int id){
     id += 2*N;
     id = id%N;
-    return v[id] * configuration(id);
+    return v[id] * double(configuration[id]);
 }
 
 /**
@@ -357,7 +336,7 @@ long double getClusterV(int id){
 double getClusterSize(int id){
     id += 2*N;
     id = id%N;
-    return int(configuration(id));
+    return configuration[id];
 }
 
 /**
@@ -367,8 +346,8 @@ double getClusterSize(int id){
  * @return int 
  */
 int getLeftId(int id){
-    if(configuration((id-1+N)%N)<0){
-        return int(configuration((id-1+N)%N)) + id;
+    if(configuration[(id-1+N)%N]<0){
+        return int(configuration[(id-1+N)%N]) + id;
     }else{
         return id - 1;
     }
@@ -409,7 +388,7 @@ void doSingleTimeStep(){
 
     //find first cluster
     thisId = 0;                                        
-    while(configuration(thisId)<1){
+    while(configuration[thisId]<1){
         thisId++;
     }
     firstId = thisId;
@@ -420,7 +399,7 @@ void doSingleTimeStep(){
     thisSize = getClusterSize(thisId);
 
     leftId = getLeftId(thisId);
-    rightId = int(configuration(thisId%N)) + thisId;
+    rightId = int(configuration[thisId%N]) + thisId;
 
     leftCM = getClusterCM(leftId);
     leftV = getClusterV(leftId);
@@ -464,12 +443,12 @@ void doSingleTimeStep(){
             //if a merge happened but no further merges are detected for the same cluster at this time, update the configuration
             if(collisionHappened > 0){
                 for(int i = 0; i<rightSize; i++){
-                    configuration((i+rightId+N)%N) = 0;
+                    configuration[(i+rightId+N)%N] = 0;
                     v[(i+rightId+N)%N] = rightV/rightSize;
                     x[(i+rightId+N)%N] = rightCM/rightSize + sigma * double(2*i-rightSize+1)/2;
                 }
-                configuration((rightId+N)%N) = rightSize;
-                configuration((rightId+rightSize-1+N)%N) = -rightSize;
+                configuration[(rightId+N)%N] = rightSize;
+                configuration[(rightId+rightSize-1+N)%N] = -rightSize;
                 collisionHappened = 0;
             }
             
@@ -485,7 +464,7 @@ void doSingleTimeStep(){
             thisSize = rightSize;
             
             //load data for the new cluster neighboring to the right
-            rightId = int(configuration((thisId+N)%N)) + thisId;
+            rightId = int(configuration[(thisId+N)%N]) + thisId;
             
             rightCM = getClusterCM(rightId);
             
@@ -601,17 +580,17 @@ void simulateSystem(){
 
         //collect statistics for one-particle density
         for(int i = 0; i < N; i++){
-            density((x[i] - floor(x[i])) * spatialSteps)++;
+            density[(x[i] - floor(x[i])) * spatialSteps]++;
         }
 
         //collect statistics for two-particle density at contact
         for(int i = 0; i < N; i++){
-            if(configuration(i) > 0){
+            if(configuration[i] > 0){
                 if(fabs(getMinimumImageDistance(x[(i-1+N)%N], x[i])) - sigma < delta){
-                        density_II((x[(i-1+N)%N] - floor(x[(i-1+N)%N])) * spatialSteps)++;
+                        density_II[(x[(i-1+N)%N] - floor(x[(i-1+N)%N])) * spatialSteps]++;
                     }
-                if(configuration(i) > 1){
-                    i += configuration(i) - 1;
+                if(configuration[i] > 1){
+                    i += configuration[i] - 1;
                 }
             }
         }
@@ -660,8 +639,10 @@ void simulateSystem(){
     file_jump_direction.close();
 
     //normalize densities
-    density /= totalSimulationTime/dt*L*delta;
-    density_II /= totalSimulationTime/dt*L*delta*deltaPrime;
+    for(int i = 0; i < spatialSteps; i++){
+        density[i] /= totalSimulationTime/dt*L*delta;
+        density_II[i] /= totalSimulationTime/dt*L*delta*deltaPrime;
+    }
 }
 
 /**
@@ -669,12 +650,14 @@ void simulateSystem(){
  * 
  */
 void saveResults(){
-    arma::mat output = arma::zeros<arma::mat>(spatialSteps, 2);
+    FILE *densityFile;
+    std::string filename = outputPrefix+"/density";
+    densityFile = fopen(filename.c_str(), "w");
     for(int i = 0; i < spatialSteps; i++){
-        output(i, 0) = i * delta;
-        output(i, 1) = density(i);
+        fprintf(densityFile, "%f, ", i * delta);
+        fprintf(densityFile, "%Lf\n", density[i]);
     }
-    output.save(outputPrefix+"/density", arma::raw_ascii);
+    fclose(densityFile);
 }
 
 /**
