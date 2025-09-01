@@ -9,9 +9,7 @@ A. P. Antonov, S. Schweers, A. Ryabov, and P. Maass, Brownian dynamics simulatio
 A. P. Antonov, S. Schweers, A. Ryabov, and P. Maass, Fast Brownian cluster dynamics, Comput. Phys. Commun. **309**, 109474 (2025).
 
 # Dependencies
-Our software requires both boost and Armadillo, which can be downloaded from the following sources:
-
-http://arma.sourceforge.net/
+Our software requires boost, which can be downloaded from the following source:
 
 https://www.boost.org/
 
